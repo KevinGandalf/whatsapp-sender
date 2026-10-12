@@ -14,6 +14,7 @@ import {
   type RecipientRef,
 } from "@/lib/vorlauf";
 import { readEwsCalendar, readGraphCalendar, readOutlookCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
+import { isSealed, openSecret, sealSecret } from "@/lib/field-crypto.server";
 import { startAlwaysOn } from "./always-on.server";
 
 type Role = "admin" | "user";
@@ -48,7 +49,7 @@ async function ensureProfile(sql: Sql, userId: string): Promise<Role> {
   const count = await sql<{ n: number }>`select count(*)::int as n from profiles`;
   const role: Role = Number(count[0]?.n ?? 0) === 0 ? "admin" : "user";
   await sql`insert into profiles (user_id, role, display_name, phone)
-    values (${userId}, ${role}, ${people[0]?.name || "Konto"}, '')
+    values (${userId}, ${role}, ${sealSecret(people[0]?.name || "Konto")}, '')
     on conflict (user_id) do nothing`;
   const again = await sql<{ role: string }>`select role from profiles where user_id = ${userId}`;
   return again[0]?.role === "admin" ? "admin" : "user";
@@ -69,14 +70,14 @@ async function directory(sql: Sql, country: string): Promise<{ contacts: Person[
   return {
     contacts: contacts.filter((row) => row.active).map((row) => ({
       id: row.id,
-      name: row.name,
-      phone: normalizePhone(row.phone, country),
-    })),
+      name: openSecret(row.name),
+      phone: normalizePhone(openSecret(row.phone), country),
+    })).sort((a, b) => a.name.localeCompare(b.name, "de")),
     colleagues: colleagues.map((row) => ({
       id: row.user_id,
-      name: row.display_name || "Konto",
-      phone: normalizePhone(row.phone, country),
-    })),
+      name: openSecret(row.display_name) || "Konto",
+      phone: normalizePhone(openSecret(row.phone), country),
+    })).sort((a, b) => a.name.localeCompare(b.name, "de")),
   };
 }
 
@@ -98,12 +99,14 @@ async function org(sql: Sql) {
     time_zone: string;
   }>`select phone_number_id, access_token, country_code, time_zone from org_settings where id = 'org'`;
   return (
-    rows[0] ?? {
-      phone_number_id: "",
-      access_token: "",
-      country_code: "49",
-      time_zone: "Europe/Berlin",
-    }
+    rows[0]
+      ? { ...rows[0], access_token: openSecret(rows[0].access_token) }
+      : {
+          phone_number_id: "",
+          access_token: "",
+          country_code: "49",
+          time_zone: "Europe/Berlin",
+        }
   );
 }
 
@@ -122,8 +125,72 @@ function publicOrg(
   };
 }
 
+let protecting: Promise<void> | null = null;
+
+function protectStoredSecrets(sql: Sql): Promise<void> {
+  protecting ??= rewriteSecrets(sql).catch((err) => {
+    protecting = null;
+    throw err;
+  });
+  return protecting;
+}
+
+async function rewriteSecrets(sql: Sql) {
+  const profiles = await sql<{ user_id: string; display_name: string; phone: string }>`
+    select user_id, display_name, phone from profiles`;
+  for (const row of profiles) {
+    if (isSealed(row.display_name) && (!row.phone || isSealed(row.phone))) continue;
+    await sql`update profiles set display_name = ${sealSecret(row.display_name)}, phone = ${sealSecret(row.phone)} where user_id = ${row.user_id}`;
+  }
+  const contacts = await sql<{ id: string; name: string; phone: string; note: string }>`select id, name, phone, note from contacts`;
+  for (const row of contacts) {
+    if (isSealed(row.name) && isSealed(row.phone) && (!row.note || isSealed(row.note))) continue;
+    await sql`update contacts set name = ${sealSecret(row.name)}, phone = ${sealSecret(row.phone)}, note = ${sealSecret(row.note)} where id = ${row.id}`;
+  }
+  const routines = await sql<{ id: string; title: string; body: string; recipients: string }>`select id, title, body, recipients from routines`;
+  for (const row of routines) {
+    if (isSealed(row.title) && isSealed(row.body) && isSealed(row.recipients)) continue;
+    await sql`update routines set title = ${sealSecret(row.title)}, body = ${sealSecret(row.body)}, recipients = ${sealSecret(row.recipients)} where id = ${row.id}`;
+  }
+  const jobs = await sql<{ id: string; title: string; phone: string; contact_name: string; body: string; error: string | null }>`
+    select id, title, phone, contact_name, body, error from jobs`;
+  for (const row of jobs) {
+    if (isSealed(row.title) && isSealed(row.phone) && (!row.contact_name || isSealed(row.contact_name)) && isSealed(row.body) && (!row.error || isSealed(row.error))) continue;
+    await sql`update jobs set title = ${sealSecret(row.title)}, phone = ${sealSecret(row.phone)}, contact_name = ${sealSecret(row.contact_name)},
+      body = ${sealSecret(row.body)}, error = ${row.error ? sealSecret(row.error) : null} where id = ${row.id}`;
+  }
+  const rules = await sql<{ id: string; name: string; title_contains: string; recipients: string; template: string }>`
+    select id, name, title_contains, recipients, template from calendar_rules`;
+  for (const row of rules) {
+    if (isSealed(row.name) && (!row.title_contains || isSealed(row.title_contains)) && isSealed(row.recipients) && isSealed(row.template)) continue;
+    await sql`update calendar_rules set name = ${sealSecret(row.name)}, title_contains = ${sealSecret(row.title_contains)},
+      recipients = ${sealSecret(row.recipients)}, template = ${sealSecret(row.template)} where id = ${row.id}`;
+  }
+  const orgRows = await sql<{ access_token: string }>`select access_token from org_settings where id = 'org'`;
+  if (orgRows[0]?.access_token && !isSealed(orgRows[0].access_token)) {
+    await sql`update org_settings set access_token = ${sealSecret(orgRows[0].access_token)} where id = 'org'`;
+  }
+  const sources = await sql<{ user_id: string; graph_token: string; ews_user: string; ews_secret: string }>`
+    select user_id, graph_token, ews_user, ews_secret from user_sources`;
+  for (const row of sources) {
+    if ((!row.graph_token || isSealed(row.graph_token)) && (!row.ews_user || isSealed(row.ews_user)) && (!row.ews_secret || isSealed(row.ews_secret))) continue;
+    await sql`update user_sources set graph_token = ${sealSecret(row.graph_token)}, ews_user = ${sealSecret(row.ews_user)}, ews_secret = ${sealSecret(row.ews_secret)} where user_id = ${row.user_id}`;
+  }
+  const chats = await sql<{ jid: string; name: string; preview: string }>`select jid, name, preview from wa_chats`;
+  for (const row of chats) {
+    if ((!row.name || isSealed(row.name)) && (!row.preview || isSealed(row.preview))) continue;
+    await sql`update wa_chats set name = ${sealSecret(row.name)}, preview = ${sealSecret(row.preview)} where jid = ${row.jid}`;
+  }
+  const messages = await sql<{ id: string; sender: string; body: string }>`select id, sender, body from wa_messages`;
+  for (const row of messages) {
+    if ((!row.sender || isSealed(row.sender)) && isSealed(row.body)) continue;
+    await sql`update wa_messages set sender = ${sealSecret(row.sender)}, body = ${sealSecret(row.body)} where id = ${row.id}`;
+  }
+}
+
 export async function bootstrap(userId: string) {
   const sql = await getSql();
+  await protectStoredSecrets(sql);
   const role = await ensureProfile(sql, userId);
   const me = await sql<{ display_name: string; phone: string; email: string }>`
     select p.display_name, p.phone, u.email
@@ -165,14 +232,17 @@ export async function bootstrap(userId: string) {
   const source = sourceRows[0];
   return {
     role,
-    displayName: me[0]?.display_name ?? "",
+    displayName: openSecret(me[0]?.display_name ?? ""),
     email: me[0]?.email ?? "",
-    phone: me[0]?.phone ?? "",
-    contacts: contactRows.filter((row) => row.active || role === "admin" || row.created_by === userId),
+    phone: openSecret(me[0]?.phone ?? ""),
+    contacts: contactRows
+      .map((row) => ({ ...row, name: openSecret(row.name), phone: openSecret(row.phone), note: openSecret(row.note) }))
+      .sort((a, b) => a.name.localeCompare(b.name, "de"))
+      .filter((row) => row.active || role === "admin" || row.created_by === userId),
     colleagues: book.colleagues,
-    routines: routineRows.map(presentRoutine),
+    routines: routineRows.map(presentRoutine).sort((a, b) => a.title.localeCompare(b.title, "de")),
     jobs: jobRows.map(presentJob),
-    rules: ruleRows.map((row) => ({
+    rules: ruleRows.map((row) => revealRule(row)).map((row) => ({
       id: row.id,
       name: row.name,
       enabled: row.enabled,
@@ -181,24 +251,24 @@ export async function bootstrap(userId: string) {
       anchor: row.anchor === "end" ? "end" : "start",
       recipients: parseRecipients(row.recipients),
       template: row.template,
-    })),
+    })).sort((a, b) => a.name.localeCompare(b.name, "de")),
     org: { ...publicOrg(settings, link.linked), linkPhase: link.phase, linkName: link.name },
     source: {
       source: source?.source ?? "demo",
       graphCalendarId: source?.graph_calendar_id ?? "",
       ewsUrl: source?.ews_url ?? "https://outlook.office365.com/EWS/Exchange.asmx",
-      ewsUser: source?.ews_user ?? "",
+      ewsUser: openSecret(source?.ews_user ?? ""),
       ewsAuth: source?.ews_auth === "bearer" ? "bearer" : "basic",
       horizonDays: source?.horizon_days ?? 14,
-      hasGraphToken: Boolean(source?.graph_token),
-      hasEwsSecret: Boolean(source?.ews_secret),
+      hasGraphToken: Boolean(openSecret(source?.graph_token ?? "")),
+      hasEwsSecret: Boolean(openSecret(source?.ews_secret ?? "")),
     },
     accounts: accounts.map((row) => ({
       id: row.id,
       email: row.email,
       name: row.name,
       role: row.role === "admin" ? "admin" : "user",
-      phone: row.phone ?? "",
+      phone: openSecret(row.phone ?? ""),
     })),
   };
 }
@@ -254,20 +324,35 @@ type SourceRow = {
   ews_secret: string;
 };
 
-function presentRoutine(row: RoutineRow) {
+function revealRoutine(row: RoutineRow): RoutineRow {
+  return { ...row, title: openSecret(row.title), body: openSecret(row.body), recipients: openSecret(row.recipients) };
+}
+
+function revealRule(row: RuleRow): RuleRow {
   return {
-    id: row.id,
-    ownerId: row.owner_id,
-    title: row.title,
-    body: row.body,
-    frequency: (row.frequency === "weekly" || row.frequency === "monthly" ? row.frequency : "daily") as Frequency,
-    weekdays: row.weekdays.split(",").map(Number).filter((n) => n >= 1 && n <= 7),
-    monthDay: row.month_day,
-    timeLocal: row.time_local,
-    timeZone: row.time_zone,
-    recipients: parseRecipients(row.recipients),
-    enabled: row.enabled,
-    nextRun: iso(row.next_run),
+    ...row,
+    name: openSecret(row.name),
+    title_contains: openSecret(row.title_contains),
+    recipients: openSecret(row.recipients),
+    template: openSecret(row.template),
+  };
+}
+
+function presentRoutine(row: RoutineRow) {
+  const plain = revealRoutine(row);
+  return {
+    id: plain.id,
+    ownerId: plain.owner_id,
+    title: plain.title,
+    body: plain.body,
+    frequency: (plain.frequency === "weekly" || plain.frequency === "monthly" ? plain.frequency : "daily") as Frequency,
+    weekdays: plain.weekdays.split(",").map(Number).filter((n) => n >= 1 && n <= 7),
+    monthDay: plain.month_day,
+    timeLocal: plain.time_local,
+    timeZone: plain.time_zone,
+    recipients: parseRecipients(plain.recipients),
+    enabled: plain.enabled,
+    nextRun: iso(plain.next_run),
   };
 }
 
@@ -276,13 +361,13 @@ function presentJob(row: JobRow) {
     id: row.id,
     ownerId: row.owner_id,
     routineId: row.routine_id,
-    title: row.title,
-    phone: row.phone,
-    contactName: row.contact_name,
-    body: row.body,
+    title: openSecret(row.title),
+    phone: openSecret(row.phone),
+    contactName: openSecret(row.contact_name),
+    body: openSecret(row.body),
     sendAt: iso(row.send_at) ?? new Date(0).toISOString(),
     status: row.status,
-    error: row.error,
+    error: row.error == null ? null : openSecret(row.error),
     sentAt: iso(row.sent_at),
   };
 }
@@ -293,7 +378,7 @@ export async function savePhone(userId: string, phone: string) {
   const settings = await org(sql);
   const normalized = phone.trim() ? normalizePhone(phone, settings.country_code) : "";
   if (normalized && !isE164(normalized)) throw new Error("Telefonnummer prüfen.");
-  await sql`update profiles set phone = ${normalized} where user_id = ${userId}`;
+  await sql`update profiles set phone = ${sealSecret(normalized)} where user_id = ${userId}`;
   return bootstrap(userId);
 }
 
@@ -308,11 +393,11 @@ export async function saveContact(userId: string, input: { id?: string; name: st
   const existing = await sql<{ created_by: string }>`select created_by from contacts where id = ${id}`;
   if (existing[0] && existing[0].created_by !== userId) {
     await requireAdmin(sql, userId);
-    await sql`update contacts set name = ${input.name.trim()}, phone = ${phone}, note = ${input.note.trim()} where id = ${id}`;
+    await sql`update contacts set name = ${sealSecret(input.name.trim())}, phone = ${sealSecret(phone)}, note = ${sealSecret(input.note.trim())} where id = ${id}`;
   } else if (existing[0]) {
-    await sql`update contacts set name = ${input.name.trim()}, phone = ${phone}, note = ${input.note.trim()} where id = ${id}`;
+    await sql`update contacts set name = ${sealSecret(input.name.trim())}, phone = ${sealSecret(phone)}, note = ${sealSecret(input.note.trim())} where id = ${id}`;
   } else {
-    await sql`insert into contacts (id, name, phone, note, created_by) values (${id}, ${input.name.trim()}, ${phone}, ${input.note.trim()}, ${userId})`;
+    await sql`insert into contacts (id, name, phone, note, created_by) values (${id}, ${sealSecret(input.name.trim())}, ${sealSecret(phone)}, ${sealSecret(input.note.trim())}, ${userId})`;
   }
   return bootstrap(userId);
 }
@@ -358,16 +443,16 @@ export async function saveRoutine(
     after: new Date(),
   });
   const weekdays = [...new Set(input.weekdays.filter((day) => day >= 1 && day <= 7))].sort().join(",");
-  const recipients = JSON.stringify(input.recipients.slice(0, 40));
+  const recipients = sealSecret(JSON.stringify(input.recipients.slice(0, 40)));
   if (existing[0]) {
-    await sql`update routines set title = ${input.title.trim()}, body = ${input.body.trim()},
+    await sql`update routines set title = ${sealSecret(input.title.trim())}, body = ${sealSecret(input.body.trim())},
       frequency = ${input.frequency}, weekdays = ${weekdays}, month_day = ${Math.min(28, Math.max(1, input.monthDay || 1))},
       time_local = ${input.timeLocal}, time_zone = ${settings.time_zone}, recipients = ${recipients},
       enabled = ${input.enabled}, next_run = ${next.toISOString()}
       where id = ${id}`;
   } else {
     await sql`insert into routines (id, owner_id, title, body, frequency, weekdays, month_day, time_local, time_zone, recipients, enabled, next_run)
-      values (${id}, ${owner}, ${input.title.trim()}, ${input.body.trim()}, ${input.frequency}, ${weekdays},
+      values (${id}, ${owner}, ${sealSecret(input.title.trim())}, ${sealSecret(input.body.trim())}, ${input.frequency}, ${weekdays},
         ${Math.min(28, Math.max(1, input.monthDay || 1))}, ${input.timeLocal}, ${settings.time_zone}, ${recipients},
         ${input.enabled}, ${next.toISOString()})`;
   }
@@ -400,7 +485,7 @@ export async function queueManual(userId: string, input: { recipients: Recipient
   for (const person of people) {
     const id = crypto.randomUUID();
     await sql`insert into jobs (id, owner_id, title, phone, contact_name, body, send_at, status, dedupe_key)
-      values (${id}, ${userId}, ${"Manuell"}, ${person.phone}, ${person.name}, ${input.body.trim()}, ${when.toISOString()}, 'queued', ${id})`;
+      values (${id}, ${userId}, ${sealSecret("Manuell")}, ${sealSecret(person.phone)}, ${sealSecret(person.name)}, ${sealSecret(input.body.trim())}, ${when.toISOString()}, 'queued', ${id})`;
   }
   return bootstrap(userId);
 }
@@ -424,7 +509,7 @@ export async function retryJob(userId: string, id: string) {
 async function expandRoutines(sql: Sql, now: Date) {
   const settings = await org(sql);
   const book = await directory(sql, settings.country_code);
-  const routines = await sql<RoutineRow>`select id, owner_id, title, body, frequency, weekdays, month_day, time_local, time_zone, recipients, enabled, next_run from routines where enabled = true`;
+  const routines = (await sql<RoutineRow>`select id, owner_id, title, body, frequency, weekdays, month_day, time_local, time_zone, recipients, enabled, next_run from routines where enabled = true`).map(revealRoutine);
   const horizon = now.getTime() + 36 * 60 * 60_000;
   for (const routine of routines) {
     const frequency: Frequency = routine.frequency === "weekly" || routine.frequency === "monthly" ? routine.frequency : "daily";
@@ -444,7 +529,7 @@ async function expandRoutines(sql: Sql, now: Date) {
         const key = `${routine.id}:${person.id}:${next.toISOString().slice(0, 16)}`;
         const id = crypto.randomUUID();
         await sql`insert into jobs (id, owner_id, routine_id, title, phone, contact_name, body, send_at, status, dedupe_key)
-          values (${id}, ${routine.owner_id}, ${routine.id}, ${routine.title}, ${person.phone}, ${person.name}, ${routine.body}, ${next.toISOString()}, 'queued', ${key})
+          values (${id}, ${routine.owner_id}, ${routine.id}, ${sealSecret(routine.title)}, ${sealSecret(person.phone)}, ${sealSecret(person.name)}, ${sealSecret(routine.body)}, ${next.toISOString()}, 'queued', ${key})
           on conflict (dedupe_key) do nothing`;
       }
       next = nextOccurrence({ ...spec, after: next });
@@ -495,16 +580,18 @@ async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed:
       const locked = await sql<{ id: string }>`
         update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
       if (!locked[0]) continue;
+      const phone = openSecret(job.phone);
+      const body = openSecret(job.body);
       const result = live && session
-        ? await session.sendText(job.phone, job.body).catch((err: unknown) => ({
+        ? await session.sendText(phone, body).catch((err: unknown) => ({
             ok: false as const,
             error: err instanceof Error ? err.message : "Versand fehlgeschlagen.",
           }))
         : await sendWhatsAppMessage({
             phoneNumberId: settings.phone_number_id,
             accessToken: settings.access_token,
-            to: job.phone,
-            body: job.body,
+            to: phone,
+            body,
           });
       if (result.ok) {
         sent += 1;
@@ -514,10 +601,10 @@ async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed:
       const attempts = Number(job.attempts ?? 0) + 1;
       if (permanentSendError(result.error) || attempts >= 12) {
         failed += 1;
-        await sql`update jobs set status = 'failed', attempts = ${attempts}, error = ${result.error}, retry_at = null where id = ${job.id}`;
+        await sql`update jobs set status = 'failed', attempts = ${attempts}, error = ${sealSecret(result.error)}, retry_at = null where id = ${job.id}`;
       } else {
         const retryAt = new Date(Date.now() + retryDelayMs(attempts)).toISOString();
-        await sql`update jobs set status = 'queued', attempts = ${attempts}, error = ${result.error}, retry_at = ${retryAt} where id = ${job.id}`;
+        await sql`update jobs set status = 'queued', attempts = ${attempts}, error = ${sealSecret(result.error)}, retry_at = ${retryAt} where id = ${job.id}`;
       }
     }
     return { sent, failed, warning: null };
@@ -567,6 +654,7 @@ export function pulseAuthorized(header: string | null): boolean {
 
 export async function systemPulse() {
   const sql = await getSql();
+  await protectStoredSecrets(sql);
   await import("./wa-session.server").then((mod) => mod.keepAlive()).catch(() => undefined);
   const now = new Date();
   await expandRoutines(sql, now);
@@ -596,7 +684,7 @@ export async function saveOrg(
   await requireAdmin(sql, userId);
   const current = await org(sql);
   const token = input.accessToken.trim() && !input.accessToken.includes("••••") ? input.accessToken.trim() : current.access_token;
-  await sql`update org_settings set phone_number_id = ${input.phoneNumberId.trim()}, access_token = ${token},
+  await sql`update org_settings set phone_number_id = ${input.phoneNumberId.trim()}, access_token = ${sealSecret(token)},
     country_code = ${input.countryCode.replace(/\D/g, "") || "49"}, time_zone = ${input.timeZone.trim() || "Europe/Berlin"}
     where id = 'org'`;
   return bootstrap(userId);
@@ -616,8 +704,8 @@ export async function setAccount(userId: string, input: { id: string; role: Role
   const people = await sql<{ name: string }>`select name from "user" where id = ${input.id}`;
   if (!people[0]) throw new Error("Konto nicht gefunden.");
   await sql`insert into profiles (user_id, role, display_name, phone)
-    values (${input.id}, ${input.role}, ${people[0].name}, ${phone})
-    on conflict (user_id) do update set role = ${input.role}, phone = ${phone}`;
+    values (${input.id}, ${input.role}, ${sealSecret(people[0].name)}, ${sealSecret(phone)})
+    on conflict (user_id) do update set role = ${input.role}, phone = ${sealSecret(phone)}`;
   return bootstrap(userId);
 }
 
@@ -641,15 +729,15 @@ export async function saveRule(
   const id = input.id?.trim() || crypto.randomUUID();
   const existing = await sql<{ owner_id: string }>`select owner_id from calendar_rules where id = ${id}`;
   if (existing[0] && existing[0].owner_id !== userId) throw new Error("Diese Regel gehört jemand anderem.");
-  const recipients = JSON.stringify(input.recipients.slice(0, 40));
+  const recipients = sealSecret(JSON.stringify(input.recipients.slice(0, 40)));
   const minutes = Math.max(0, Math.min(10080, input.minutes || 0));
-  const template = input.template.trim() || DEFAULT_TEMPLATE;
+  const template = sealSecret(input.template.trim() || DEFAULT_TEMPLATE);
   if (existing[0]) {
-    await sql`update calendar_rules set name = ${input.name.trim()}, enabled = ${input.enabled}, title_contains = ${input.titleContains.trim()},
+    await sql`update calendar_rules set name = ${sealSecret(input.name.trim())}, enabled = ${input.enabled}, title_contains = ${sealSecret(input.titleContains.trim())},
       minutes = ${minutes}, anchor = ${input.anchor}, recipients = ${recipients}, template = ${template} where id = ${id} and owner_id = ${userId}`;
   } else {
     await sql`insert into calendar_rules (id, owner_id, name, enabled, title_contains, minutes, anchor, recipients, template)
-      values (${id}, ${userId}, ${input.name.trim()}, ${input.enabled}, ${input.titleContains.trim()}, ${minutes}, ${input.anchor}, ${recipients}, ${template})`;
+      values (${id}, ${userId}, ${sealSecret(input.name.trim())}, ${input.enabled}, ${sealSecret(input.titleContains.trim())}, ${minutes}, ${input.anchor}, ${recipients}, ${template})`;
   }
   return bootstrap(userId);
 }
@@ -666,7 +754,7 @@ export async function applyRules(userId: string, events: CalEvent[]) {
   await ensureProfile(sql, userId);
   const settings = await org(sql);
   const book = await directory(sql, settings.country_code);
-  const rules = await sql<RuleRow>`select id, name, enabled, title_contains, minutes, anchor, recipients, template from calendar_rules where owner_id = ${userId} and enabled = true`;
+  const rules = (await sql<RuleRow>`select id, name, enabled, title_contains, minutes, anchor, recipients, template from calendar_rules where owner_id = ${userId} and enabled = true`).map(revealRule);
   const now = Date.now();
   let created = 0;
   for (const rule of rules) {
@@ -683,7 +771,7 @@ export async function applyRules(userId: string, events: CalEvent[]) {
         const key = `${rule.id}:${event.id}:${person.id}:${when.toISOString().slice(0, 16)}`;
         const id = crypto.randomUUID();
         const inserted = await sql<{ id: string }>`insert into jobs (id, owner_id, title, phone, contact_name, body, send_at, status, dedupe_key)
-          values (${id}, ${userId}, ${event.title || rule.name}, ${person.phone}, ${person.name}, ${body}, ${when.toISOString()}, 'queued', ${key})
+          values (${id}, ${userId}, ${sealSecret(event.title || rule.name)}, ${sealSecret(person.phone)}, ${sealSecret(person.name)}, ${sealSecret(body)}, ${when.toISOString()}, 'queued', ${key})
           on conflict (dedupe_key) do nothing returning id`;
         if (inserted[0]) created += 1;
       }
@@ -709,14 +797,16 @@ export async function saveSource(
   const sql = await getSql();
   await ensureProfile(sql, userId);
   const current = await sql<SourceRow>`select graph_token, ews_secret from user_sources where user_id = ${userId}`;
-  const graphToken = input.graphToken.trim() && !input.graphToken.includes("••••") ? input.graphToken.trim() : current[0]?.graph_token ?? "";
-  const ewsSecret = input.ewsSecret.trim() && !input.ewsSecret.includes("••••") ? input.ewsSecret.trim() : current[0]?.ews_secret ?? "";
+  const storedToken = openSecret(current[0]?.graph_token ?? "");
+  const storedSecret = openSecret(current[0]?.ews_secret ?? "");
+  const graphToken = input.graphToken.trim() && !input.graphToken.includes("••••") ? input.graphToken.trim() : storedToken;
+  const ewsSecret = input.ewsSecret.trim() && !input.ewsSecret.includes("••••") ? input.ewsSecret.trim() : storedSecret;
   const source = ["demo", "outlook", "graph", "ews"].includes(input.source) ? input.source : "demo";
   const days = Math.min(60, Math.max(1, input.horizonDays || 14));
   await sql`insert into user_sources (user_id, source, graph_token, graph_calendar_id, ews_url, ews_user, ews_secret, ews_auth, horizon_days)
-    values (${userId}, ${source}, ${graphToken}, ${input.graphCalendarId.trim()}, ${input.ewsUrl.trim()}, ${input.ewsUser.trim()}, ${ewsSecret}, ${input.ewsAuth}, ${days})
-    on conflict (user_id) do update set source = ${source}, graph_token = ${graphToken}, graph_calendar_id = ${input.graphCalendarId.trim()},
-      ews_url = ${input.ewsUrl.trim()}, ews_user = ${input.ewsUser.trim()}, ews_secret = ${ewsSecret}, ews_auth = ${input.ewsAuth}, horizon_days = ${days}`;
+    values (${userId}, ${source}, ${sealSecret(graphToken)}, ${input.graphCalendarId.trim()}, ${input.ewsUrl.trim()}, ${sealSecret(input.ewsUser.trim())}, ${sealSecret(ewsSecret)}, ${input.ewsAuth}, ${days})
+    on conflict (user_id) do update set source = ${source}, graph_token = ${sealSecret(graphToken)}, graph_calendar_id = ${input.graphCalendarId.trim()},
+      ews_url = ${input.ewsUrl.trim()}, ews_user = ${sealSecret(input.ewsUser.trim())}, ews_secret = ${sealSecret(ewsSecret)}, ews_auth = ${input.ewsAuth}, horizon_days = ${days}`;
   return bootstrap(userId);
 }
 
@@ -724,7 +814,9 @@ export async function loadCalendar(userId: string) {
   const sql = await getSql();
   await ensureProfile(sql, userId);
   const rows = await sql<SourceRow>`select source, graph_calendar_id, ews_url, ews_user, ews_auth, horizon_days, graph_token, ews_secret from user_sources where user_id = ${userId}`;
-  const source = rows[0];
+  const source = rows[0]
+    ? { ...rows[0], ews_user: openSecret(rows[0].ews_user), graph_token: openSecret(rows[0].graph_token), ews_secret: openSecret(rows[0].ews_secret) }
+    : undefined;
   const kind = source?.source ?? "demo";
   const range = rangeFor(new Date(), source?.horizon_days ?? 14);
   if (kind === "demo") return { ok: true as const, events: demoEvents(), error: undefined };

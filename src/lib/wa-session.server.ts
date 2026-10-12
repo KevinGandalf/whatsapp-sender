@@ -16,6 +16,7 @@ import {
 import QRCode from "qrcode";
 import pino from "pino";
 import { getSql } from "@/lib/db";
+import { openSecret, sealSecret } from "@/lib/field-crypto.server";
 
 const AUTH_DIR = join(process.cwd(), "data", "wa-auth");
 const logger = pino({ level: "silent" });
@@ -111,7 +112,7 @@ async function rememberNames(contacts: { id?: string | null; name?: string | nul
     const name = contact.name?.trim() || contact.notify?.trim() || "";
     if (!name) continue;
     names.set(contact.id, name);
-    await sql`update wa_chats set name = ${name} where jid = ${contact.id} and name = ''`;
+    await sql`update wa_chats set name = ${sealSecret(name)} where jid = ${contact.id} and name = ''`;
   }
 }
 
@@ -125,16 +126,17 @@ async function saveChats(
     const lastAt = chat.conversationTimestamp == null ? null : stamp(chat.conversationTimestamp);
     const unread = chat.unreadCount == null ? null : Number(chat.unreadCount) || 0;
     const group = isJidGroup(chat.id);
-    await sql`insert into wa_chats (jid, name, preview, last_at, unread, is_group)
-      values (${chat.id}, ${name}, '', ${lastAt}, ${unread ?? 0}, ${group})
-      on conflict (jid) do update set
-        name = case
-          when wa_chats.name <> '' and (excluded.name = '' or excluded.name = 'Gruppe' or left(excluded.name, 1) = '+') then wa_chats.name
-          else excluded.name
-        end,
-        last_at = coalesce(excluded.last_at, wa_chats.last_at),
-        unread = coalesce(${unread}, wa_chats.unread),
-        is_group = excluded.is_group`;
+    const existing = await sql<{ name: string }>`select name from wa_chats where jid = ${chat.id}`;
+    const current = openSecret(existing[0]?.name ?? "");
+    const keep = current && (name === "Gruppe" || name.startsWith("+")) ? current : name;
+    const stored = sealSecret(keep);
+    if (!existing[0]) {
+      await sql`insert into wa_chats (jid, name, preview, last_at, unread, is_group)
+        values (${chat.id}, ${stored}, '', ${lastAt}, ${unread ?? 0}, ${group})`;
+    } else {
+      await sql`update wa_chats set name = ${stored}, last_at = coalesce(${lastAt}, last_at),
+        unread = coalesce(${unread}, unread), is_group = ${group} where jid = ${chat.id}`;
+    }
   }
 }
 
@@ -150,12 +152,14 @@ async function saveMessages(messages: WAMessage[], touchPreview: boolean) {
     const sender = message.key.fromMe ? "" : message.pushName?.trim() || phoneLabel(message.key.participant || jid);
     const sentAt = stamp(message.messageTimestamp);
     await sql`insert into wa_messages (id, jid, from_me, sender, body, kind, sent_at)
-      values (${id}, ${jid}, ${Boolean(message.key.fromMe)}, ${sender}, ${described.body.slice(0, 4000)}, ${described.kind}, ${sentAt})
+      values (${id}, ${jid}, ${Boolean(message.key.fromMe)}, ${sealSecret(sender)}, ${sealSecret(described.body.slice(0, 4000))}, ${described.kind}, ${sentAt})
       on conflict (id) do nothing`;
     if (touchPreview) {
       const name = names.get(jid) || phoneLabel(jid);
+      const existing = await sql<{ name: string }>`select name from wa_chats where jid = ${jid}`;
+      const storedName = existing[0]?.name ? existing[0].name : sealSecret(name);
       await sql`insert into wa_chats (jid, name, preview, last_at, unread, is_group)
-        values (${jid}, ${name}, ${described.body.slice(0, 180)}, ${sentAt}, 0, ${isJidGroup(jid)})
+        values (${jid}, ${storedName}, ${sealSecret(described.body.slice(0, 180))}, ${sentAt}, 0, ${isJidGroup(jid)})
         on conflict (jid) do update set
           preview = excluded.preview,
           last_at = excluded.last_at,
@@ -351,8 +355,8 @@ export async function listChats() {
   }>`select jid, name, preview, last_at, unread, is_group from wa_chats order by last_at desc nulls last limit 200`;
   return rows.map((row) => ({
     jid: row.jid,
-    name: row.name || phoneLabel(row.jid),
-    preview: row.preview,
+    name: openSecret(row.name) || phoneLabel(row.jid),
+    preview: openSecret(row.preview),
     lastAt: row.last_at instanceof Date ? row.last_at.toISOString() : row.last_at,
     unread: Number(row.unread) || 0,
     isGroup: Boolean(row.is_group),
@@ -373,8 +377,8 @@ export async function listMessages(jid: string) {
   return rows.map((row) => ({
     id: row.id,
     fromMe: Boolean(row.from_me),
-    sender: row.sender,
-    body: row.body,
+    sender: openSecret(row.sender),
+    body: openSecret(row.body),
     kind: row.kind,
     sentAt: row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at),
   }));

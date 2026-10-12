@@ -38,7 +38,7 @@ Die Variablen gehören in die Dienstumgebung, nicht ins Repository. `BETTER_AUTH
 export DATABASE_URL="postgresql://vorlauf:GEHEIM@127.0.0.1:5432/vorlauf"
 export BETTER_AUTH_URL="https://vorlauf.intern.example"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
-export VORLAUF_PULSE_SECRET="$(openssl rand -base64 32)"
+export VORLAUF_DATA_KEY="$(openssl rand -base64 32)"
 # Nur setzen, wenn Exchange im eigenen Netz liegt:
 # export VORLAUF_ALLOW_PRIVATE_EWS=true
 # Interne Zertifizierungsstelle, falls Exchange ihr vertraut:
@@ -47,7 +47,7 @@ export VORLAUF_PULSE_SECRET="$(openssl rand -base64 32)"
 npm run build
 ```
 
-`BETTER_AUTH_SECRET` danach nicht mehr wechseln, sonst sind alle Sitzungen ungültig.
+`BETTER_AUTH_SECRET` und `VORLAUF_DATA_KEY` danach nicht mehr wechseln. Der erste signiert die Anmeldung, der zweite entschlüsselt Nachrichten und Empfänger. Fehlt der Datenschlüssel, legt der Dienst einmalig `data/data-key` an. Diese Datei oder die Variable sichern. Ohne sie sind die gespeicherten Texte nicht mehr lesbar.
 
 ## 3. Dienst starten
 
@@ -74,6 +74,7 @@ Environment=NODE_ENV=production
 Environment=DATABASE_URL=postgresql://vorlauf:GEHEIM@127.0.0.1:5432/vorlauf
 Environment=BETTER_AUTH_URL=https://vorlauf.intern.example
 Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
+Environment=VORLAUF_DATA_KEY=base64-aus-openssl
 Environment=VORLAUF_PULSE_SECRET=anderes-zufaelliges-geheimnis
 Environment=VORLAUF_ALLOW_PRIVATE_EWS=true
 ExecStart=/usr/bin/npm start
@@ -154,4 +155,7 @@ sudo systemctl restart vorlauf
 
 ## Was nicht ins Repository gehört
 
-Zugangstoken, Datenbankpasswort und die beiden Geheimnisse bleiben in der Dienstumgebung. Eine `.env` im Projektordner wird nicht mit ausgeliefert und sollte dort auch nicht liegen bleiben.
+Zugangstoken, Datenbankpasswort, Anmeldgeheimnis und `VORLAUF_DATA_KEY` bleiben in der Dienstumgebung. `data/data-key` und `data/wa-auth` ebenfalls nicht einchecken.
+
+Nachrichten, Empfängernamen, Telefonnummern, Chatverläufe und die hinterlegten Kalender- und WhatsApp-Zugänge liegen in der Datenbank als AES-256-GCM. Zeiten, Status und die E-Mail der Anmeldung bleiben lesbar, sonst kann der Dienst nicht planen und nicht anmelden. Bestehende Klartextzeilen werden beim nächsten Start verschlüsselt.
+
