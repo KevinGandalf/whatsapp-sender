@@ -14,32 +14,40 @@ export type IoResult = {
   pending?: boolean;
 };
 
+function privateEwsAllowed(): boolean {
+  return process.env.VORLAUF_ALLOW_PRIVATE_EWS === "true";
+}
+
+function isMetadataHost(host: string): boolean {
+  return host === "metadata.google.internal" || host === "metadata.google.com";
+}
+
 function blockedAddress(host: string): boolean {
   const value = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (
-    value === "localhost" ||
-    value.endsWith(".localhost") ||
-    value.endsWith(".local") ||
-    value.endsWith(".internal") ||
-    value === "metadata.google.internal" ||
-    value === "metadata.google.com"
-  ) {
-    return true;
-  }
+  if (isMetadataHost(value)) return true;
   const kind = isIP(value);
   if (kind === 4) {
     const [a, b] = value.split(".").map(Number);
-    if (a === 0 || a === 10 || a === 127) return true;
     if (a === 169 && b === 254) return true;
+    if (privateEwsAllowed()) return false;
+    if (a === 0 || a === 10 || a === 127) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
     if (a === 100 && b >= 64 && b <= 127) return true;
     return false;
   }
   if (kind === 6) {
-    return value === "::1" || value.startsWith("fe80") || value.startsWith("fc") || value.startsWith("fd");
+    if (value.startsWith("fe80")) return true;
+    if (privateEwsAllowed()) return false;
+    return value === "::1" || value.startsWith("fc") || value.startsWith("fd");
   }
-  return false;
+  if (privateEwsAllowed()) return false;
+  return (
+    value === "localhost" ||
+    value.endsWith(".localhost") ||
+    value.endsWith(".local") ||
+    value.endsWith(".internal")
+  );
 }
 
 async function assertPublicHttps(raw: string): Promise<URL> {
@@ -52,7 +60,9 @@ async function assertPublicHttps(raw: string): Promise<URL> {
   if (url.protocol !== "https:") throw new Error("Nur HTTPS-Adressen sind erlaubt.");
   if (url.username || url.password) throw new Error("Zugangsdaten nicht in die URL schreiben.");
   if (blockedAddress(url.hostname)) {
-    throw new Error("Lokale und private Adressen sind von diesem Dienst aus blockiert.");
+    throw new Error(
+      "Lokale und private Adressen sind blockiert. Auf dem internen Server VORLAUF_ALLOW_PRIVATE_EWS=true setzen, wenn Exchange im eigenen Netz liegt.",
+    );
   }
   const resolved = await lookup(url.hostname);
   if (blockedAddress(resolved.address)) {

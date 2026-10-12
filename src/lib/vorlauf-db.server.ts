@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { getSql, type Sql } from "@/lib/db";
 import {
   DEFAULT_TEMPLATE,
@@ -445,38 +446,68 @@ async function expandRoutines(sql: Sql, now: Date) {
   }
 }
 
+async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed: number; warning: string | null }> {
+  const settings = await org(sql);
+  const configured = settings.access_token.trim().length >= 20 && settings.phone_number_id.trim().length > 0;
+  if (!configured) return { sent: 0, failed: 0, warning: "WhatsApp ist noch nicht verbunden." };
+  let sent = 0;
+  let failed = 0;
+  const due = await sql<{ id: string; phone: string; body: string }>`
+    select id, phone, body from jobs
+    where status = 'queued' and send_at <= ${now.toISOString()}
+    order by send_at asc limit 3`;
+  for (const job of due) {
+    const locked = await sql<{ id: string }>`
+      update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
+    if (!locked[0]) continue;
+    const result = await sendWhatsAppMessage({
+      phoneNumberId: settings.phone_number_id,
+      accessToken: settings.access_token,
+      to: job.phone,
+      body: job.body,
+    });
+    if (result.ok) {
+      sent += 1;
+      await sql`update jobs set status = 'sent', sent_at = ${new Date().toISOString()}, error = null where id = ${job.id}`;
+    } else {
+      failed += 1;
+      await sql`update jobs set status = 'failed', error = ${result.error} where id = ${job.id}`;
+    }
+  }
+  return { sent, failed, warning: null };
+}
+
+export function pulseConfigured(): boolean {
+  return Boolean(process.env.VORLAUF_PULSE_SECRET?.trim());
+}
+
+export function pulseAuthorized(header: string | null): boolean {
+  const secret = process.env.VORLAUF_PULSE_SECRET?.trim();
+  const match = /^Bearer\s+(\S+)$/.exec(header ?? "");
+  if (!secret || !match) return false;
+  const given = Buffer.from(match[1]);
+  const want = Buffer.from(secret);
+  if (given.length !== want.length) return false;
+  return timingSafeEqual(given, want);
+}
+
+export async function systemPulse() {
+  const sql = await getSql();
+  const now = new Date();
+  await expandRoutines(sql, now);
+  const result = await dispatchDue(sql, now);
+  const pending = await sql<{ n: number }>`select count(*)::int as n from jobs where status = 'queued'`;
+  return { ...result, queued: Number(pending[0]?.n ?? 0) };
+}
+
 export async function pulse(userId: string) {
   const sql = await getSql();
   await ensureProfile(sql, userId);
   const now = new Date();
   await expandRoutines(sql, now);
-  const settings = await org(sql);
-  let sent = 0;
-  if (settings.access_token.trim().length >= 20 && settings.phone_number_id.trim()) {
-    const due = await sql<{ id: string; phone: string; body: string }>`
-      select id, phone, body from jobs
-      where status = 'queued' and send_at <= ${now.toISOString()}
-      order by send_at asc limit 3`;
-    for (const job of due) {
-      const locked = await sql<{ id: string }>`
-        update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
-      if (!locked[0]) continue;
-      const result = await sendWhatsAppMessage({
-        phoneNumberId: settings.phone_number_id,
-        accessToken: settings.access_token,
-        to: job.phone,
-        body: job.body,
-      });
-      if (result.ok) {
-        sent += 1;
-        await sql`update jobs set status = 'sent', sent_at = ${new Date().toISOString()}, error = null where id = ${job.id}`;
-      } else {
-        await sql`update jobs set status = 'failed', error = ${result.error} where id = ${job.id}`;
-      }
-    }
-  }
+  const result = await dispatchDue(sql, now);
   const state = await bootstrap(userId);
-  return { sent, warning: state.org.configured ? null : "WhatsApp ist noch nicht verbunden.", jobs: state.jobs, routines: state.routines };
+  return { sent: result.sent, warning: result.warning, jobs: state.jobs, routines: state.routines };
 }
 
 export async function saveOrg(
