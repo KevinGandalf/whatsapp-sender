@@ -1,15 +1,15 @@
-# Vorlauf
+# WASender
 
 WhatsApp-Nachrichten aus dem Kalender und aus wiederkehrenden Terminen. Mehrere Konten teilen sich eine Empfängerliste. Admins verbinden WhatsApp und vergeben Rollen, Nutzer planen ihre eigenen Sendungen.
 
-Diese Anleitung richtet Vorlauf auf einem internen Server ein. Die Vorschau in Grok bleibt davon unberührt.
+Diese Anleitung richtet WASender auf einem internen Server ein. Die Vorschau in Grok bleibt davon unberührt.
 
 ## Was der Server können muss
 
 - Node.js 22 und npm
 - PostgreSQL 16, nur vom App-Server aus erreichbar
 - Ausgehend HTTPS nach `web.whatsapp.com` (verknüpftes Gerät, wie WhatsApp Web) und, falls genutzt, nach `graph.facebook.com`
-- Ein HTTPS-Name im internen Netz, zum Beispiel `https://vorlauf.intern.example`
+- Ein HTTPS-Name im internen Netz, zum Beispiel `https://wasender.intern.example`
 
 Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Google- und X-Anmeldung laufen über einen externen Dienst und gehören nicht auf einen abgeschotteten Server. Intern wird mit E-Mail und Passwort gearbeitet.
 
@@ -18,8 +18,8 @@ Nachrichten gehen raus, solange der Dienst läuft. Niemand muss angemeldet sein 
 ## 1. Datenbank
 
 ```bash
-sudo -u postgres createuser --pwprompt vorlauf
-sudo -u postgres createdb --owner=vorlauf vorlauf
+sudo -u postgres createuser --pwprompt wasender
+sudo -u postgres createdb --owner=wasender wasender
 ```
 
 Die Tabellen legt der erste Build selbst an. Es gibt kein separates Migrationskommando, das man vergessen müsste: `npm run build` führt es aus, sobald `DATABASE_URL` gesetzt ist.
@@ -35,8 +35,8 @@ npm ci
 Die Variablen gehören in die Dienstumgebung, nicht ins Repository. `BETTER_AUTH_URL` muss exakt die Adresse sein, die im Browser steht, inklusive `https://` und ohne Schrägstrich am Ende.
 
 ```bash
-export DATABASE_URL="postgresql://vorlauf:GEHEIM@127.0.0.1:5432/vorlauf"
-export BETTER_AUTH_URL="https://vorlauf.intern.example"
+export DATABASE_URL="postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender"
+export BETTER_AUTH_URL="https://wasender.intern.example"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export VORLAUF_DATA_KEY="$(openssl rand -base64 32)"
 # Nur setzen, wenn Exchange im eigenen Netz liegt:
@@ -59,20 +59,20 @@ npm start
 
 `HOST` und `PORT` ändern die Bindung, falls der Proxy auf einem anderen Rechner liegt. Dann die Datenbank und den Port nicht ins ganze Netz stellen.
 
-Beispiel für systemd, Datei `/etc/systemd/system/vorlauf.service`:
+Beispiel für systemd, Datei `/etc/systemd/system/wasender.service`:
 
 ```ini
 [Unit]
-Description=Vorlauf
+Description=WASender
 After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=vorlauf
+User=wasender
 WorkingDirectory=/opt/whatsapp-sender
 Environment=NODE_ENV=production
-Environment=DATABASE_URL=postgresql://vorlauf:GEHEIM@127.0.0.1:5432/vorlauf
-Environment=BETTER_AUTH_URL=https://vorlauf.intern.example
+Environment=DATABASE_URL=postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender
+Environment=BETTER_AUTH_URL=https://wasender.intern.example
 Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
 Environment=VORLAUF_DATA_KEY=base64-aus-openssl
 Environment=VORLAUF_PULSE_SECRET=anderes-zufaelliges-geheimnis
@@ -87,13 +87,13 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now vorlauf
+sudo systemctl enable --now wasender
 ```
 
 Caddy auf demselben Rechner:
 
 ```caddy
-vorlauf.intern.example {
+wasender.intern.example {
   reverse_proxy 127.0.0.1:3000
 }
 ```
@@ -109,7 +109,7 @@ Ein Cronjob ist nicht nötig. Wer zusätzlich von außen prüfen will, kann weit
 
 ## 5. Erstes Konto und WhatsApp
 
-1. `https://vorlauf.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin.
+1. `https://wasender.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin.
 2. Unter **Anbindung** auf **Code anzeigen** gehen. Am Telefon: WhatsApp, verknüpfte Geräte, Gerät hinzufügen, Code scannen. Das ist dieselbe Art Sitzung wie WhatsApp Web. Sie bleibt auf dem Server, solange der Dienst läuft, und nach einem Neustart ohne neuen Code weiter, weil die Anmeldung unter `data/wa-auth` liegt. Diesen Ordner sichern und nicht ins Git legen.
 3. Unter **Chats** stehen danach die Unterhaltungen und die letzten Nachrichten. Neue Nachrichten kommen von selbst nach. Antworten aus dem Chat gehen über diese Sitzung.
 4. Geplante Regeltermine benutzen dieselbe Sitzung. Die Cloud API darunter ist nur der Ersatz, falls kein Gerät verknüpft ist.
@@ -142,7 +142,7 @@ cd /opt/whatsapp-sender
 git pull
 npm ci
 npm run build
-sudo systemctl restart vorlauf
+sudo systemctl restart wasender
 ```
 
 `DATABASE_URL` muss beim Build gesetzt sein, damit neue Tabellen ankommen. Angewendete Migrationsdateien nicht nachträglich ändern.

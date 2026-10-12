@@ -630,7 +630,7 @@ async function materializeCalendars(sql: Sql) {
         if (!loaded.ok || loaded.events.length === 0) continue;
         await applyRules(owner.owner_id, loaded.events);
       } catch (err) {
-        console.error("[vorlauf] Kalender", owner.owner_id, err instanceof Error ? err.message : err);
+        console.error("[wasender] Kalender", owner.owner_id, err instanceof Error ? err.message : err);
       }
     }
   } finally {
@@ -660,7 +660,7 @@ export async function systemPulse() {
   await expandRoutines(sql, now);
   const result = await dispatchDue(sql, now);
   await materializeCalendars(sql).catch((err: unknown) => {
-    console.error("[vorlauf] Kalender", err instanceof Error ? err.message : err);
+    console.error("[wasender] Kalender", err instanceof Error ? err.message : err);
   });
   const pending = await sql<{ n: number }>`select count(*)::int as n from jobs where status = 'queued'`;
   return { ...result, queued: Number(pending[0]?.n ?? 0) };

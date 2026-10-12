@@ -92,7 +92,7 @@ export function VorlaufApp() {
   if (!data) {
     return (
       <main className="mx-auto max-w-6xl px-4 py-8">
-        <h1 className="font-display text-4xl text-fg">Vorlauf</h1>
+        <h1 className="font-display text-4xl text-fg">WASender</h1>
         <p className="mt-3 text-sm text-muted">{error ?? "Leitstand wird geladen."}</p>
       </main>
     );
@@ -120,7 +120,7 @@ export function VorlaufApp() {
       <aside className="flex min-w-0 flex-col gap-6">
         <div>
           <p className="text-xs font-medium tracking-widest text-subtle uppercase">{admin ? "Admin" : "Nutzer"}</p>
-          <h1 className="font-display text-4xl leading-none text-fg">Vorlauf</h1>
+          <h1 className="font-display text-4xl leading-none text-fg">WASender</h1>
           <p className="mt-3 text-sm leading-6 text-muted">{data.displayName}</p>
         </div>
         <nav className="flex w-full min-w-0 gap-2 overflow-x-auto lg:flex-col" aria-label="Bereiche">
@@ -235,7 +235,7 @@ async function commit(run: () => Promise<DeskData>, onChange: (data: DeskData) =
 function Routines({ data, onChange, onError }: { data: DeskData; onChange: (data: DeskData) => void; onError: (message: string | null) => void }) {
   const [draft, setDraft] = useState({
     title: "",
-    body: "Kurze Erinnerung aus Vorlauf.",
+    body: "Kurze Erinnerung aus WASender.",
     frequency: "weekly" as Frequency,
     weekdays: [1, 2, 3, 4, 5],
     monthDay: 1,
