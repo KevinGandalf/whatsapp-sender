@@ -519,13 +519,13 @@ function Rules({ data, onChange, onError }: { data: DeskData; onChange: (data: D
 function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data: DeskData) => void; onError: (message: string | null) => void }) {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [note, setNote] = useState<string | null>(null);
-  const [source, setSource] = useState(data.source.source);
+  const [source, setSource] = useState(data.source.source === "outlook" ? "ews" : data.source.source);
   const [graphToken, setGraphToken] = useState("");
   const [graphCalendarId, setGraphCalendarId] = useState(data.source.graphCalendarId);
   const [ewsUrl, setEwsUrl] = useState(data.source.ewsUrl);
   const [ewsUser, setEwsUser] = useState(data.source.ewsUser);
   const [ewsSecret, setEwsSecret] = useState("");
-  const [ewsAuth, setEwsAuth] = useState<"basic" | "bearer">(data.source.ewsAuth === "bearer" ? "bearer" : "basic");
+  const [ewsAuth, setEwsAuth] = useState<"basic" | "bearer" | "ntlm">(data.source.ewsAuth);
   const groups = useMemo(() => {
     const map = new Map<string, CalEvent[]>();
     for (const event of [...events].sort((a, b) => a.start.localeCompare(b.start))) {
@@ -561,9 +561,8 @@ function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data
         {(
           [
             ["demo", "Beispiel"],
-            ["outlook", "Outlook über Grok"],
-            ["graph", "Microsoft 365"],
             ["ews", "Exchange EWS"],
+            ["graph", "Microsoft 365"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -588,10 +587,21 @@ function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data
       ) : null}
       {source === "ews" ? (
         <div className="mb-4 grid gap-3">
-          <Field label="EWS-Adresse" hint="Öffentliches HTTPS. Heimnetz-Adressen werden nicht aufgerufen.">
+          <Field label="EWS-Adresse" hint="Lokal zum Beispiel https://exchange.firma.local/EWS/Exchange.asmx">
             <TextInput value={ewsUrl} onChange={(event) => setEwsUrl(event.target.value)} />
           </Field>
-          <Field label="Benutzer">
+          <Field label="Anmeldung">
+            <select
+              className="min-h-11 rounded-lg border border-line bg-bg px-3 text-sm text-fg"
+              value={ewsAuth}
+              onChange={(event) => setEwsAuth(event.target.value === "basic" || event.target.value === "bearer" ? event.target.value : "ntlm")}
+            >
+              <option value="ntlm">NTLM, lokaler Exchange</option>
+              <option value="basic">Basic</option>
+              <option value="bearer">Bearer</option>
+            </select>
+          </Field>
+          <Field label="Benutzer" hint={ewsAuth === "ntlm" ? "DOMÄNE\\benutzer oder benutzer@firma.local" : "Postfach"}>
             <TextInput value={ewsUser} onChange={(event) => setEwsUser(event.target.value)} />
           </Field>
           <Field label={ewsAuth === "bearer" ? "Bearer-Token" : "Kennwort"}>

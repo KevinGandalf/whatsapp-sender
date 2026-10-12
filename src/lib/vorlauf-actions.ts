@@ -145,7 +145,7 @@ export const saveCalendarSource = createServerFn({ method: "POST" })
         ewsUrl: z.string().max(300),
         ewsUser: z.string().max(200),
         ewsSecret: z.string().max(8000),
-        ewsAuth: z.enum(["basic", "bearer"]),
+        ewsAuth: z.enum(["basic", "bearer", "ntlm"]),
         horizonDays: z.number(),
       })
       .parse(input),

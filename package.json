@@ -59,6 +59,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.0.0",
     "fast-xml-parser": "^5.11.2",
+    "httpntlm": "^1.8.13",
     "jose": "6.2.9",
     "kysely": "^0.28.5",
     "lightningcss": "^1.28.0",

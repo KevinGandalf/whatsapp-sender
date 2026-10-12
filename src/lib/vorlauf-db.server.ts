@@ -13,7 +13,7 @@ import {
   type Frequency,
   type RecipientRef,
 } from "@/lib/vorlauf";
-import { readEwsCalendar, readGraphCalendar, readOutlookCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
+import { readEwsCalendar, readGraphCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
 import { isSealed, openSecret, sealSecret } from "@/lib/field-crypto.server";
 import { startAlwaysOn } from "./always-on.server";
 
@@ -256,9 +256,9 @@ export async function bootstrap(userId: string) {
     source: {
       source: source?.source ?? "demo",
       graphCalendarId: source?.graph_calendar_id ?? "",
-      ewsUrl: source?.ews_url ?? "https://outlook.office365.com/EWS/Exchange.asmx",
+      ewsUrl: source?.ews_url || "https://exchange.local/EWS/Exchange.asmx",
       ewsUser: openSecret(source?.ews_user ?? ""),
-      ewsAuth: source?.ews_auth === "bearer" ? "bearer" : "basic",
+      ewsAuth: (source?.ews_auth === "bearer" || source?.ews_auth === "basic" || source?.ews_auth === "ntlm" ? source.ews_auth : "ntlm") as "basic" | "bearer" | "ntlm",
       horizonDays: source?.horizon_days ?? 14,
       hasGraphToken: Boolean(openSecret(source?.graph_token ?? "")),
       hasEwsSecret: Boolean(openSecret(source?.ews_secret ?? "")),
@@ -790,7 +790,7 @@ export async function saveSource(
     ewsUrl: string;
     ewsUser: string;
     ewsSecret: string;
-    ewsAuth: "basic" | "bearer";
+    ewsAuth: "basic" | "bearer" | "ntlm";
     horizonDays: number;
   },
 ) {
@@ -820,7 +820,9 @@ export async function loadCalendar(userId: string) {
   const kind = source?.source ?? "demo";
   const range = rangeFor(new Date(), source?.horizon_days ?? 14);
   if (kind === "demo") return { ok: true as const, events: demoEvents(), error: undefined };
-  if (kind === "outlook") return readOutlookCalendar(range);
+  if (kind === "outlook") {
+    return { ok: false as const, events: [], error: "Outlook über Grok ist entfernt. Kalender läuft über den lokalen Exchange per EWS." };
+  }
   if (kind === "graph") {
     return readGraphCalendar({
       token: source?.graph_token ?? "",
@@ -832,7 +834,7 @@ export async function loadCalendar(userId: string) {
     url: source?.ews_url ?? "",
     user: source?.ews_user ?? "",
     secret: source?.ews_secret ?? "",
-    auth: source?.ews_auth === "bearer" ? "bearer" : "basic",
+    auth: source?.ews_auth === "bearer" || source?.ews_auth === "basic" || source?.ews_auth === "ntlm" ? source.ews_auth : "ntlm",
     ...range,
   });
 }

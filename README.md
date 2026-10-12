@@ -2,7 +2,7 @@
 
 WhatsApp-Nachrichten aus dem Kalender und aus wiederkehrenden Terminen. Mehrere Konten teilen sich eine Empfängerliste. Admins verbinden WhatsApp und vergeben Rollen, Nutzer planen ihre eigenen Sendungen.
 
-Diese Anleitung richtet WASender auf einem internen Server ein. Die Vorschau in Grok bleibt davon unberührt.
+Diese Anleitung richtet WASender auf einem internen Server ein.
 
 ## Was der Server können muss
 
@@ -11,7 +11,7 @@ Diese Anleitung richtet WASender auf einem internen Server ein. Die Vorschau in 
 - Ausgehend HTTPS nach `web.whatsapp.com` (verknüpftes Gerät, wie WhatsApp Web) und, falls genutzt, nach `graph.facebook.com`
 - Ein HTTPS-Name im internen Netz, zum Beispiel `https://wasender.intern.example`
 
-Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Google- und X-Anmeldung laufen über einen externen Dienst und gehören nicht auf einen abgeschotteten Server. Intern wird mit E-Mail und Passwort gearbeitet.
+Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Angemeldet wird mit E-Mail und Passwort. Es gibt keine Anmeldung über Google oder Grok.
 
 Nachrichten gehen raus, solange der Dienst läuft. Niemand muss angemeldet sein und kein Fenster muss offen bleiben. Der Prozess prüft alle 15 Sekunden selbst, hält die WhatsApp-Sitzung verbunden, legt fällige Regeltermine an und verschickt sie. Kalenderregeln über Microsoft Graph oder Exchange liest er alle fünf Minuten nach. Schlägt ein Versand kurz fehl, bleibt die Nachricht in der Warteschlange und wird mit Abstand erneut versucht.
 
@@ -39,10 +39,10 @@ export DATABASE_URL="postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender"
 export BETTER_AUTH_URL="https://wasender.intern.example"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export VORLAUF_DATA_KEY="$(openssl rand -base64 32)"
-# Nur setzen, wenn Exchange im eigenen Netz liegt:
-# export VORLAUF_ALLOW_PRIVATE_EWS=true
-# Interne Zertifizierungsstelle, falls Exchange ihr vertraut:
+# Internes Zertifikat von Exchange, falls der Server ihm nicht vertraut:
 # export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/interne-ca.pem
+# Nur wenn Exchange ein selbstsigniertes Zertifikat hat und keine interne CA vorliegt:
+# export VORLAUF_EWS_INSECURE_TLS=true
 
 npm run build
 ```
@@ -76,7 +76,7 @@ Environment=BETTER_AUTH_URL=https://wasender.intern.example
 Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
 Environment=VORLAUF_DATA_KEY=base64-aus-openssl
 Environment=VORLAUF_PULSE_SECRET=anderes-zufaelliges-geheimnis
-Environment=VORLAUF_ALLOW_PRIVATE_EWS=true
+Environment=VORLAUF_EWS_INSECURE_TLS=false
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=5
@@ -125,11 +125,10 @@ WhatsApp muss vom Server aus `web.whatsapp.com` erreichen. Medien werden nicht h
 | Quelle | Wann |
 |---|---|
 | Beispiel | Nur zum Ausprobieren, ohne Zugang |
+| Exchange EWS | Lokaler Exchange. Adresse `https://exchange.firma.local/EWS/Exchange.asmx`. Anmeldung NTLM als `DOMÄNE\benutzer` oder `benutzer@firma.local`, sonst Basic oder Bearer |
 | Microsoft 365 | Graph-Token mit `Calendars.Read`, braucht ausgehend `graph.microsoft.com` |
-| Exchange EWS | Adresse `https://mail.firma.example/EWS/Exchange.asmx`, Benutzer und Kennwort oder Bearer-Token |
-| Outlook über Grok | Nur in der Grok-Vorschau, nicht auf dem internen Server |
 
-Private Adressen, `.local` und `.internal` sind abgelehnt, bis `VORLAUF_ALLOW_PRIVATE_EWS=true` gesetzt ist. Cloud-Metadaten-Adressen bleiben auch dann gesperrt. EWS muss HTTPS sprechen. Kennwort nicht in die URL schreiben.
+Private Namen, `.local` und Adressen im eigenen Netz sind für EWS erlaubt. Cloud-Metadaten-Adressen bleiben gesperrt. HTTP nur im privaten Netz, sonst HTTPS. Kennwort nicht in die URL schreiben. Vertraut der Server dem Exchange-Zertifikat nicht, `NODE_EXTRA_CA_CERTS` setzen. `VORLAUF_EWS_INSECURE_TLS=true` ist nur der Notnagel für ein selbstsigniertes Zertifikat.
 
 Regeltermine hängen nicht am Kalender. Sie laufen täglich, an gewählten Wochentagen oder monatlich am Tag 1–28.
 

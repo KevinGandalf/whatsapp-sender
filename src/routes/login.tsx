@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
+import { authClient, authEnabled } from "@/lib/auth/client";
 import { Button, Field, TextInput } from "@/components/ui";
 
 export const Route = createFileRoute("/login")({ component: Login });
@@ -79,13 +79,6 @@ function Login() {
             >
               {mode === "up" ? "Ich habe schon ein Konto" : "Neues Konto anlegen"}
             </button>
-            <div className="grid gap-2">
-              {GROK_PROVIDERS.map((provider) => (
-                <Button key={provider.providerId} variant="ghost" onClick={() => signIn(provider.providerId, { callbackURL: "/" })}>
-                  Weiter mit {provider.label}
-                </Button>
-              ))}
-            </div>
           </form>
         ) : (
           <p className="mt-4 text-sm text-muted">Anmeldung ist aus.</p>

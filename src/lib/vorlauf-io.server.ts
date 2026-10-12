@@ -1,6 +1,9 @@
+import http from "node:http";
+import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { XMLParser } from "fast-xml-parser";
+import httpntlm from "httpntlm";
 import type { CalEvent } from "./vorlauf.ts";
 
 const GRAPH_HOSTS = new Set(["graph.microsoft.com", "graph.microsoft.us"]);
@@ -15,11 +18,33 @@ export type IoResult = {
 };
 
 function privateEwsAllowed(): boolean {
-  return process.env.VORLAUF_ALLOW_PRIVATE_EWS === "true";
+  return process.env.VORLAUF_ALLOW_PRIVATE_EWS !== "false";
+}
+
+function insecureEwsTls(): boolean {
+  return process.env.VORLAUF_EWS_INSECURE_TLS === "true";
 }
 
 function isMetadataHost(host: string): boolean {
   return host === "metadata.google.internal" || host === "metadata.google.com";
+}
+
+function isPrivateHost(host: string): boolean {
+  const value = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (value === "localhost" || value.endsWith(".localhost") || value.endsWith(".local") || value.endsWith(".internal")) {
+    return true;
+  }
+  const kind = isIP(value);
+  if (kind === 4) {
+    const [a, b] = value.split(".").map(Number);
+    if (a === 10 || a === 127) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (kind === 6) return value === "::1" || value.startsWith("fc") || value.startsWith("fd");
+  return false;
 }
 
 function blockedAddress(host: string): boolean {
@@ -42,31 +67,33 @@ function blockedAddress(host: string): boolean {
     return value === "::1" || value.startsWith("fc") || value.startsWith("fd");
   }
   if (privateEwsAllowed()) return false;
-  return (
-    value === "localhost" ||
-    value.endsWith(".localhost") ||
-    value.endsWith(".local") ||
-    value.endsWith(".internal")
-  );
+  return isPrivateHost(value);
 }
 
-async function assertPublicHttps(raw: string): Promise<URL> {
+async function assertEwsUrl(raw: string): Promise<URL> {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw new Error("Die Adresse ist ungültig.");
   }
-  if (url.protocol !== "https:") throw new Error("Nur HTTPS-Adressen sind erlaubt.");
+  const local = isPrivateHost(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local && privateEwsAllowed())) {
+    throw new Error("EWS braucht HTTPS. Im eigenen Netz ist HTTP nur für private Namen erlaubt.");
+  }
   if (url.username || url.password) throw new Error("Zugangsdaten nicht in die URL schreiben.");
   if (blockedAddress(url.hostname)) {
-    throw new Error(
-      "Lokale und private Adressen sind blockiert. Auf dem internen Server VORLAUF_ALLOW_PRIVATE_EWS=true setzen, wenn Exchange im eigenen Netz liegt.",
-    );
+    throw new Error("Diese Adresse wird nicht aufgerufen.");
   }
-  const resolved = await lookup(url.hostname);
-  if (blockedAddress(resolved.address)) {
-    throw new Error("Die Adresse zeigt auf ein privates Netz und wird nicht aufgerufen.");
+  if (isIP(url.hostname)) return url;
+  try {
+    const resolved = await lookup(url.hostname);
+    if (blockedAddress(resolved.address)) {
+      throw new Error("Die Adresse zeigt auf ein gesperrtes Netz und wird nicht aufgerufen.");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Die Adresse")) throw error;
+    throw new Error("Der Exchange-Name konnte nicht aufgelöst werden. DNS vom Server prüfen.");
   }
   return url;
 }
@@ -240,17 +267,90 @@ function faultText(node: unknown): string {
   return texts.join(" ").slice(0, 280);
 }
 
+function postXml(url: URL, headers: Record<string, string>, body: string): Promise<{ status: number; text: string }> {
+  const lib = url.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request(
+      url,
+      {
+        method: "POST",
+        headers: { ...headers, "content-length": Buffer.byteLength(body) },
+        rejectUnauthorized: !insecureEwsTls(),
+        timeout: 20_000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString("utf8").slice(0, 1_000_000),
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("Exchange hat nicht rechtzeitig geantwortet.")));
+    req.write(body);
+    req.end();
+  });
+}
+
+function splitNtlmUser(user: string): { domain: string; username: string } {
+  const slash = user.indexOf("\\");
+  if (slash > 0) return { domain: user.slice(0, slash), username: user.slice(slash + 1) };
+  return { domain: "", username: user };
+}
+
+function postNtlm(
+  url: URL,
+  user: string,
+  password: string,
+  headers: Record<string, string>,
+  body: string,
+): Promise<{ status: number; text: string }> {
+  const account = splitNtlmUser(user);
+  const agent =
+    url.protocol === "https:"
+      ? new https.Agent({ keepAlive: true, rejectUnauthorized: !insecureEwsTls() })
+      : new http.Agent({ keepAlive: true });
+  return new Promise((resolve, reject) => {
+    httpntlm.post(
+      {
+        url: url.toString(),
+        username: account.username,
+        password,
+        domain: account.domain,
+        workstation: "",
+        headers,
+        body,
+        agent,
+        timeout: 20_000,
+      },
+      (err, res) => {
+        if (err || !res) {
+          reject(err ?? new Error("NTLM-Anmeldung fehlgeschlagen."));
+          return;
+        }
+        const raw = res.body;
+        const text = typeof raw === "string" ? raw : raw ? Buffer.from(raw).toString("utf8") : "";
+        resolve({ status: res.statusCode ?? 0, text: text.slice(0, 1_000_000) });
+      },
+    );
+  });
+}
+
 export async function readEwsCalendar(input: {
   url: string;
   user: string;
   secret: string;
-  auth: "basic" | "bearer";
+  auth: "basic" | "bearer" | "ntlm";
   start: string;
   end: string;
 }): Promise<IoResult> {
   let url: URL;
   try {
-    url = await assertPublicHttps(input.url.trim());
+    url = await assertEwsUrl(input.url.trim());
   } catch (error) {
     return {
       ok: false,
@@ -274,9 +374,11 @@ export async function readEwsCalendar(input: {
   };
   if (input.auth === "bearer") {
     headers.authorization = `Bearer ${secret}`;
-  } else {
+  } else if (input.auth !== "ntlm") {
     if (!input.user.trim()) return { ok: false, events: [], error: "EWS-Benutzer fehlt." };
     headers.authorization = `Basic ${Buffer.from(`${input.user.trim()}:${secret}`).toString("base64")}`;
+  } else if (!input.user.trim()) {
+    return { ok: false, events: [], error: "EWS-Benutzer fehlt." };
   }
   const soap = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -306,34 +408,37 @@ export async function readEwsCalendar(input: {
   </soap:Body>
 </soap:Envelope>`;
 
-  let res: Response;
+  let status = 0;
+  let text = "";
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: soap,
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
+    const posted = input.auth === "ntlm" ? await postNtlm(url, input.user.trim(), secret, headers, soap) : await postXml(url, headers, soap);
+    status = posted.status;
+    text = posted.text;
   } catch (error) {
     const message = error instanceof Error ? error.message : "EWS nicht erreichbar.";
     return { ok: false, events: [], error: message.slice(0, 280) };
   }
-  const text = await readLimited(res);
-  if (res.status === 401 || res.status === 403) {
-    return { ok: false, events: [], error: "Exchange hat die Anmeldung abgelehnt." };
+  if (status === 401 || status === 403) {
+    return {
+      ok: false,
+      events: [],
+      error:
+        input.auth === "ntlm"
+          ? "Exchange hat die NTLM-Anmeldung abgelehnt. Benutzer als DOMÄNE\\name oder name@firma.local prüfen."
+          : "Exchange hat die Anmeldung abgelehnt. Bei lokalem Exchange NTLM statt Basic versuchen.",
+    };
   }
   let parsed: unknown;
   try {
     parsed = xmlParser.parse(text);
   } catch {
-    return { ok: false, events: [], error: `Exchange antwortete nicht als XML (${res.status}).` };
+    return { ok: false, events: [], error: `Exchange antwortete nicht als XML (${status}).` };
   }
-  if (!res.ok) {
+  if (status < 200 || status >= 300) {
     return {
       ok: false,
       events: [],
-      error: faultText(parsed) || `Exchange antwortete mit ${res.status}.`,
+      error: faultText(parsed) || `Exchange antwortete mit ${status}.`,
     };
   }
   const items: Record<string, unknown>[] = [];
