@@ -155,3 +155,46 @@ export const saveCalendarSource = createServerFn({ method: "POST" })
 export const fetchCalendar = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => (await db()).loadCalendar(context.userId));
+
+async function wa() {
+  return import("./wa-session.server");
+}
+
+export const whatsAppStatus = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { getSql } = await import("./db");
+    await (await db()).requireAdmin(await getSql(), context.userId);
+    return (await wa()).sessionStatus();
+  });
+
+export const startWhatsApp = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { getSql } = await import("./db");
+    await (await db()).requireAdmin(await getSql(), context.userId);
+    return (await wa()).beginLink();
+  });
+
+export const stopWhatsApp = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { getSql } = await import("./db");
+    await (await db()).requireAdmin(await getSql(), context.userId);
+    return (await wa()).logoutSession();
+  });
+
+export const listWhatsAppChats = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async () => (await wa()).listChats());
+
+export const listWhatsAppMessages = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => z.object({ jid: z.string().min(1).max(120) }).parse(input))
+  .handler(async ({ data }) => (await wa()).listMessages(data.jid));
+
+export const sendWhatsAppChat = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => z.object({ jid: z.string().min(1).max(120), body: z.string().max(2000) }).parse(input))
+  .handler(async ({ data }) => (await wa()).sendToChat(data.jid, data.body));
+

@@ -33,9 +33,11 @@ import {
   type RecipientRef,
 } from "@/lib/vorlauf";
 import { Button, Field, Panel, TextArea, TextInput } from "@/components/ui";
+import { Chats } from "@/components/wa-chats";
+import { startWhatsApp, stopWhatsApp, whatsAppStatus } from "@/lib/vorlauf-actions";
 
 type DeskData = Awaited<ReturnType<typeof loadDesk>>;
-type ViewId = "kalender" | "regeln" | "termine" | "ausgang" | "empfaenger" | "konten" | "anbindung";
+type ViewId = "chats" | "kalender" | "regeln" | "termine" | "ausgang" | "empfaenger" | "konten" | "anbindung";
 
 const WEEKDAYS = [
   [1, "Mo"],
@@ -51,7 +53,7 @@ export function VorlaufApp() {
   const user = useCurrentUser();
   const [data, setData] = useState<DeskData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>("termine");
+  const [view, setView] = useState<ViewId>("chats");
 
   const refresh = async () => {
     const next = await loadDesk();
@@ -98,6 +100,7 @@ export function VorlaufApp() {
 
   const admin = data.role === "admin";
   const views: { id: ViewId; label: string }[] = [
+    { id: "chats", label: "Chats" },
     { id: "termine", label: "Regeltermine" },
     { id: "kalender", label: "Kalender" },
     { id: "regeln", label: "Regeln" },
@@ -142,7 +145,11 @@ export function VorlaufApp() {
             {next ? formatClock(next.sendAt, data.org.timeZone) : "—"}
           </p>
           <p className="mt-3 text-xs leading-5 text-subtle">
-            {data.org.configured ? "Dispatcher läuft, solange dieses Fenster offen ist." : "WhatsApp verbindet der Admin."}
+            {data.org.linked
+              ? `WhatsApp ${data.org.linkName || "ist verbunden"}.`
+              : data.org.configured
+                ? "Versand läuft über die Cloud API, Chats brauchen die Geräte-Sitzung."
+                : "WhatsApp verbindet der Admin."}
           </p>
           <div className="mt-3">
             <UserButton />
@@ -151,6 +158,7 @@ export function VorlaufApp() {
       </aside>
       <main className="grid min-w-0 gap-4">
         {error ? <p className="text-sm text-danger">{error}</p> : null}
+        {view === "chats" ? <Chats timeZone={data.org.timeZone} linked={data.org.linked} /> : null}
         {view === "termine" ? <Routines data={data} onChange={setData} onError={setError} /> : null}
         {view === "kalender" ? <Calendar data={data} onChange={setData} onError={setError} /> : null}
         {view === "regeln" ? <Rules data={data} onChange={setData} onError={setError} /> : null}
@@ -683,8 +691,67 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
   const [accessToken, setAccessToken] = useState("");
   const [countryCode, setCountryCode] = useState(data.org.countryCode);
   const [timeZone, setTimeZone] = useState(data.org.timeZone);
+  const [link, setLink] = useState<{ phase: string; qrDataUrl: string | null; name: string; error: string | null; linked: boolean } | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      void whatsAppStatus()
+        .then((next) => {
+          if (!stop) setLink(next);
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = window.setInterval(tick, 2500);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   return (
-    <Panel kicker="WhatsApp Cloud API" title="Anbindung">
+    <div className="grid gap-4">
+      <Panel kicker="WhatsApp Web" title="Gerät verknüpfen">
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-muted">
+            Auf dem Telefon: WhatsApp, verknüpfte Geräte, Gerät hinzufügen. Der Code gilt nur für diesen Server. Die Sitzung bleibt
+            liegen, auch wenn niemand die Seite offen hat.
+          </p>
+          {link?.linked ? (
+            <p className="text-sm text-fg">Verbunden als {link.name || "WhatsApp"}.</p>
+          ) : link?.qrDataUrl ? (
+            <img src={link.qrDataUrl} alt="QR-Code zum Verknüpfen" className="h-56 w-56 rounded-2xl bg-white p-2" />
+          ) : (
+            <p className="text-sm text-subtle">{link?.phase === "connecting" ? "Verbindung wird aufgebaut." : "Noch nicht verknüpft."}</p>
+          )}
+          {link?.error ? <p className="text-sm text-danger">{link.error}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => {
+                void startWhatsApp()
+                  .then(setLink)
+                  .catch((caught: unknown) => onError(caught instanceof Error ? caught.message : "Verknüpfen fehlgeschlagen."));
+              }}
+            >
+              {link?.qrDataUrl ? "Code erneuern" : "Code anzeigen"}
+            </Button>
+            {link?.linked ? (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  void stopWhatsApp()
+                    .then(setLink)
+                    .catch((caught: unknown) => onError(caught instanceof Error ? caught.message : "Abmelden fehlgeschlagen."));
+                }}
+              >
+                Gerät abmelden
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Panel>
+      <Panel kicker="Optional" title="Cloud API">
       <form
         className="grid gap-4"
         onSubmit={(event) => {
@@ -697,7 +764,8 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
         }}
       >
         <p className="text-sm leading-6 text-muted">
-          Eine Nummer für alle Konten. Token bleibt auf dem Server. {data.org.configured ? `Gespeichert ${data.org.tokenHint}.` : "Noch nicht verbunden."}
+          Nur als Ersatz, wenn keine Geräte-Sitzung verbunden ist. Geplante Nachrichten gehen sonst über das verknüpfte Telefon.
+          {data.org.tokenHint ? ` Token ${data.org.tokenHint}.` : ""}
         </p>
         <Field label="Phone Number ID">
           <TextInput value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} />
@@ -716,5 +784,6 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
         <Button type="submit">Speichern</Button>
       </form>
     </Panel>
+    </div>
   );
 }

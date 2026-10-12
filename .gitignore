@@ -7,3 +7,5 @@ artifacts
 *.log
 .env
 .env.*
+data/
+

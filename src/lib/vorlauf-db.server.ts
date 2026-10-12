@@ -53,7 +53,7 @@ async function ensureProfile(sql: Sql, userId: string): Promise<Role> {
   return again[0]?.role === "admin" ? "admin" : "user";
 }
 
-async function requireAdmin(sql: Sql, userId: string): Promise<void> {
+export async function requireAdmin(sql: Sql, userId: string): Promise<void> {
   const role = await ensureProfile(sql, userId);
   if (role !== "admin") throw new Error("Nur Admins dürfen das.");
 }
@@ -106,13 +106,17 @@ async function org(sql: Sql) {
   );
 }
 
-function publicOrg(row: { phone_number_id: string; access_token: string; country_code: string; time_zone: string }) {
+function publicOrg(
+  row: { phone_number_id: string; access_token: string; country_code: string; time_zone: string },
+  linked: boolean,
+) {
   const token = row.access_token.trim();
   return {
     phoneNumberId: row.phone_number_id,
     countryCode: row.country_code,
     timeZone: row.time_zone,
-    configured: token.length >= 20 && row.phone_number_id.trim().length > 0,
+    configured: linked || (token.length >= 20 && row.phone_number_id.trim().length > 0),
+    linked,
     tokenHint: token ? `••••${token.slice(-4)}` : "",
   };
 }
@@ -125,6 +129,9 @@ export async function bootstrap(userId: string) {
     from profiles p join "user" u on u.id = p.user_id
     where p.user_id = ${userId}`;
   const settings = await org(sql);
+  const link = await import("./wa-session.server")
+    .then((mod) => mod.linkSummary())
+    .catch(() => ({ phase: "closed" as const, name: "", linked: false }));
   const book = await directory(sql, settings.country_code);
   const contactRows = await sql<{
     id: string;
@@ -174,7 +181,7 @@ export async function bootstrap(userId: string) {
       recipients: parseRecipients(row.recipients),
       template: row.template,
     })),
-    org: publicOrg(settings),
+    org: { ...publicOrg(settings, link.linked), linkPhase: link.phase, linkName: link.name },
     source: {
       source: source?.source ?? "demo",
       graphCalendarId: source?.graph_calendar_id ?? "",
@@ -448,8 +455,10 @@ async function expandRoutines(sql: Sql, now: Date) {
 
 async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed: number; warning: string | null }> {
   const settings = await org(sql);
-  const configured = settings.access_token.trim().length >= 20 && settings.phone_number_id.trim().length > 0;
-  if (!configured) return { sent: 0, failed: 0, warning: "WhatsApp ist noch nicht verbunden." };
+  const session = await import("./wa-session.server").catch(() => null);
+  const live = session?.sessionOpen() ?? false;
+  const cloud = settings.access_token.trim().length >= 20 && settings.phone_number_id.trim().length > 0;
+  if (!live && !cloud) return { sent: 0, failed: 0, warning: "WhatsApp ist noch nicht verbunden." };
   let sent = 0;
   let failed = 0;
   const due = await sql<{ id: string; phone: string; body: string }>`
@@ -460,12 +469,17 @@ async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed:
     const locked = await sql<{ id: string }>`
       update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
     if (!locked[0]) continue;
-    const result = await sendWhatsAppMessage({
-      phoneNumberId: settings.phone_number_id,
-      accessToken: settings.access_token,
-      to: job.phone,
-      body: job.body,
-    });
+    const result = live && session
+      ? await session.sendText(job.phone, job.body).catch((err: unknown) => ({
+          ok: false,
+          error: err instanceof Error ? err.message : "Versand fehlgeschlagen.",
+        }))
+      : await sendWhatsAppMessage({
+          phoneNumberId: settings.phone_number_id,
+          accessToken: settings.access_token,
+          to: job.phone,
+          body: job.body,
+        });
     if (result.ok) {
       sent += 1;
       await sql`update jobs set status = 'sent', sent_at = ${new Date().toISOString()}, error = null where id = ${job.id}`;
@@ -493,6 +507,7 @@ export function pulseAuthorized(header: string | null): boolean {
 
 export async function systemPulse() {
   const sql = await getSql();
+  await import("./wa-session.server").then((mod) => mod.linkSummary()).catch(() => undefined);
   const now = new Date();
   await expandRoutines(sql, now);
   const result = await dispatchDue(sql, now);

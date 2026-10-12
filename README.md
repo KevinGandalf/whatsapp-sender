@@ -8,7 +8,7 @@ Diese Anleitung richtet Vorlauf auf einem internen Server ein. Die Vorschau in G
 
 - Node.js 22 und npm
 - PostgreSQL 16, nur vom App-Server aus erreichbar
-- Ausgehend HTTPS nach `graph.facebook.com` (WhatsApp Cloud API)
+- Ausgehend HTTPS nach `web.whatsapp.com` (verknüpftes Gerät, wie WhatsApp Web) und, falls genutzt, nach `graph.facebook.com`
 - Ein HTTPS-Name im internen Netz, zum Beispiel `https://vorlauf.intern.example`
 
 Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Google- und X-Anmeldung laufen über einen externen Dienst und gehören nicht auf einen abgeschotteten Server. Intern wird mit E-Mail und Passwort gearbeitet.
@@ -112,17 +112,16 @@ Pro Aufruf gehen höchstens drei fällige Nachrichten raus. Eine Minute Abstand 
 
 ## 5. Erstes Konto und WhatsApp
 
-1. `https://vorlauf.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin. Weitere Personen registrieren sich selbst.
-2. Unter **Konten** die Rolle setzen und eine Telefonnummer eintragen. Nur Konten mit Nummer tauchen in der Empfängerauswahl auf.
-3. Unter **Empfänger** Kontakte anlegen, die kein Konto brauchen.
-4. Unter **Anbindung** die WhatsApp Cloud API eintragen:
-   - In der [Meta for Developers](https://developers.facebook.com/) eine WhatsApp-Business-App
-   - Phone Number ID der Absendernummer
-   - Dauerhaftes Zugriffstoken mit der Berechtigung `whatsapp_business_messaging`
-   - Landesvorwahl `49` und Zeitzone `Europe/Berlin`, falls nichts anderes gilt
-5. Die Vorlage im WhatsApp-Manager muss für Nachrichten ausserhalb des 24-Stunden-Fensters freigegeben sein, sonst lehnt Meta den Versand ab. Vorlauf schickt den Text als normale Session-Nachricht.
+1. `https://vorlauf.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin.
+2. Unter **Anbindung** auf **Code anzeigen** gehen. Am Telefon: WhatsApp, verknüpfte Geräte, Gerät hinzufügen, Code scannen. Das ist dieselbe Art Sitzung wie WhatsApp Web. Sie bleibt auf dem Server, solange der Dienst läuft, und nach einem Neustart ohne neuen Code weiter, weil die Anmeldung unter `data/wa-auth` liegt. Diesen Ordner sichern und nicht ins Git legen.
+3. Unter **Chats** stehen danach die Unterhaltungen und die letzten Nachrichten. Neue Nachrichten kommen von selbst nach. Antworten aus dem Chat gehen über diese Sitzung.
+4. Geplante Regeltermine benutzen dieselbe Sitzung. Die Cloud API darunter ist nur der Ersatz, falls kein Gerät verknüpft ist.
+5. Unter **Konten** Rollen und Telefonnummern setzen. Unter **Empfänger** Kontakte anlegen, die kein Konto brauchen.
 
-Das Token bleibt in der Datenbank. Die Oberfläche zeigt später nur die letzten vier Zeichen.
+Cloud API, falls doch benötigt: Phone Number ID und ein dauerhaftes Token mit `whatsapp_business_messaging` aus der Meta-App. Das Token bleibt in der Datenbank. Die Oberfläche zeigt später nur die letzten vier Zeichen.
+
+WhatsApp muss vom Server aus `web.whatsapp.com` erreichen. Medien werden nicht heruntergeladen, im Verlauf steht dann nur die Art, zum Beispiel „Bild“. WhatsApp kann so eine Sitzung trennen. Sie ist für den eigenen Ablauf gedacht, nicht für Massenversand.
+
 
 ## 6. Kalender
 
