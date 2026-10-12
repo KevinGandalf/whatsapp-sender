@@ -14,6 +14,7 @@ import {
   type RecipientRef,
 } from "@/lib/vorlauf";
 import { readEwsCalendar, readGraphCalendar, readOutlookCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
+import { startAlwaysOn } from "./always-on.server";
 
 type Role = "admin" | "user";
 
@@ -453,42 +454,101 @@ async function expandRoutines(sql: Sql, now: Date) {
   }
 }
 
+const dispatchGate = globalThis as { __vorlaufDispatch?: boolean };
+const calendarGate = globalThis as { __vorlaufCalendarAt?: number; __vorlaufCalendarBusy?: boolean };
+
+function permanentSendError(error: string): boolean {
+  const text = error.toLowerCase();
+  return (
+    text.includes("nicht bei whatsapp") ||
+    text.includes("ungültig") ||
+    text.includes("fehlt") ||
+    text.includes("zu lang") ||
+    text.includes("leer") ||
+    text.includes("kann nicht beschrieben")
+  );
+}
+
+function retryDelayMs(attempts: number): number {
+  const minutes = [1, 2, 5, 10, 20, 30, 45, 60, 90, 120, 180];
+  return (minutes[Math.min(attempts, minutes.length - 1)] ?? 180) * 60_000;
+}
+
 async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed: number; warning: string | null }> {
-  const settings = await org(sql);
-  const session = await import("./wa-session.server").catch(() => null);
-  const live = session?.sessionOpen() ?? false;
-  const cloud = settings.access_token.trim().length >= 20 && settings.phone_number_id.trim().length > 0;
-  if (!live && !cloud) return { sent: 0, failed: 0, warning: "WhatsApp ist noch nicht verbunden." };
-  let sent = 0;
-  let failed = 0;
-  const due = await sql<{ id: string; phone: string; body: string }>`
-    select id, phone, body from jobs
-    where status = 'queued' and send_at <= ${now.toISOString()}
-    order by send_at asc limit 3`;
-  for (const job of due) {
-    const locked = await sql<{ id: string }>`
-      update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
-    if (!locked[0]) continue;
-    const result = live && session
-      ? await session.sendText(job.phone, job.body).catch((err: unknown) => ({
-          ok: false,
-          error: err instanceof Error ? err.message : "Versand fehlgeschlagen.",
-        }))
-      : await sendWhatsAppMessage({
-          phoneNumberId: settings.phone_number_id,
-          accessToken: settings.access_token,
-          to: job.phone,
-          body: job.body,
-        });
-    if (result.ok) {
-      sent += 1;
-      await sql`update jobs set status = 'sent', sent_at = ${new Date().toISOString()}, error = null where id = ${job.id}`;
-    } else {
-      failed += 1;
-      await sql`update jobs set status = 'failed', error = ${result.error} where id = ${job.id}`;
+  if (dispatchGate.__vorlaufDispatch) return { sent: 0, failed: 0, warning: null };
+  dispatchGate.__vorlaufDispatch = true;
+  try {
+    await sql`update jobs set status = 'queued' where status = 'sending'`;
+    const settings = await org(sql);
+    const session = await import("./wa-session.server").catch(() => null);
+    const live = session?.sessionOpen() ?? false;
+    const cloud = settings.access_token.trim().length >= 20 && settings.phone_number_id.trim().length > 0;
+    if (!live && !cloud) return { sent: 0, failed: 0, warning: "WhatsApp ist noch nicht verbunden." };
+    let sent = 0;
+    let failed = 0;
+    const due = await sql<{ id: string; phone: string; body: string; attempts: number }>`
+      select id, phone, body, attempts from jobs
+      where status = 'queued' and send_at <= ${now.toISOString()}
+        and (retry_at is null or retry_at <= ${now.toISOString()})
+      order by send_at asc limit 5`;
+    for (const job of due) {
+      const locked = await sql<{ id: string }>`
+        update jobs set status = 'sending' where id = ${job.id} and status = 'queued' returning id`;
+      if (!locked[0]) continue;
+      const result = live && session
+        ? await session.sendText(job.phone, job.body).catch((err: unknown) => ({
+            ok: false as const,
+            error: err instanceof Error ? err.message : "Versand fehlgeschlagen.",
+          }))
+        : await sendWhatsAppMessage({
+            phoneNumberId: settings.phone_number_id,
+            accessToken: settings.access_token,
+            to: job.phone,
+            body: job.body,
+          });
+      if (result.ok) {
+        sent += 1;
+        await sql`update jobs set status = 'sent', sent_at = ${new Date().toISOString()}, error = null, retry_at = null where id = ${job.id}`;
+        continue;
+      }
+      const attempts = Number(job.attempts ?? 0) + 1;
+      if (permanentSendError(result.error) || attempts >= 12) {
+        failed += 1;
+        await sql`update jobs set status = 'failed', attempts = ${attempts}, error = ${result.error}, retry_at = null where id = ${job.id}`;
+      } else {
+        const retryAt = new Date(Date.now() + retryDelayMs(attempts)).toISOString();
+        await sql`update jobs set status = 'queued', attempts = ${attempts}, error = ${result.error}, retry_at = ${retryAt} where id = ${job.id}`;
+      }
     }
+    return { sent, failed, warning: null };
+  } finally {
+    dispatchGate.__vorlaufDispatch = false;
   }
-  return { sent, failed, warning: null };
+}
+
+async function materializeCalendars(sql: Sql) {
+  const last = calendarGate.__vorlaufCalendarAt ?? 0;
+  if (calendarGate.__vorlaufCalendarBusy || Date.now() - last < 5 * 60_000) return;
+  calendarGate.__vorlaufCalendarBusy = true;
+  calendarGate.__vorlaufCalendarAt = Date.now();
+  try {
+    const owners = await sql<{ owner_id: string }>`
+      select distinct r.owner_id
+      from calendar_rules r
+      join user_sources s on s.user_id = r.owner_id
+      where r.enabled = true and s.source in ('graph', 'ews')`;
+    for (const owner of owners) {
+      try {
+        const loaded = await loadCalendar(owner.owner_id);
+        if (!loaded.ok || loaded.events.length === 0) continue;
+        await applyRules(owner.owner_id, loaded.events);
+      } catch (err) {
+        console.error("[vorlauf] Kalender", owner.owner_id, err instanceof Error ? err.message : err);
+      }
+    }
+  } finally {
+    calendarGate.__vorlaufCalendarBusy = false;
+  }
 }
 
 export function pulseConfigured(): boolean {
@@ -507,10 +567,13 @@ export function pulseAuthorized(header: string | null): boolean {
 
 export async function systemPulse() {
   const sql = await getSql();
-  await import("./wa-session.server").then((mod) => mod.linkSummary()).catch(() => undefined);
+  await import("./wa-session.server").then((mod) => mod.keepAlive()).catch(() => undefined);
   const now = new Date();
   await expandRoutines(sql, now);
   const result = await dispatchDue(sql, now);
+  await materializeCalendars(sql).catch((err: unknown) => {
+    console.error("[vorlauf] Kalender", err instanceof Error ? err.message : err);
+  });
   const pending = await sql<{ n: number }>`select count(*)::int as n from jobs where status = 'queued'`;
   return { ...result, queued: Number(pending[0]?.n ?? 0) };
 }
@@ -681,3 +744,6 @@ export async function loadCalendar(userId: string) {
     ...range,
   });
 }
+
+startAlwaysOn();
+

@@ -146,10 +146,10 @@ export function VorlaufApp() {
           </p>
           <p className="mt-3 text-xs leading-5 text-subtle">
             {data.org.linked
-              ? `WhatsApp ${data.org.linkName || "ist verbunden"}.`
+              ? `WhatsApp ${data.org.linkName || "ist verbunden"}. Versand läuft auf dem Server, auch ohne Anmeldung.`
               : data.org.configured
-                ? "Versand läuft über die Cloud API, Chats brauchen die Geräte-Sitzung."
-                : "WhatsApp verbindet der Admin."}
+                ? "Versand läuft auf dem Server über die Cloud API, auch ohne Anmeldung."
+                : "WhatsApp verbindet der Admin. Danach geht der Versand ohne Anmeldung raus."}
           </p>
           <div className="mt-3">
             <UserButton />

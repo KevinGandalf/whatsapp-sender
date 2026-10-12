@@ -13,7 +13,7 @@ Diese Anleitung richtet Vorlauf auf einem internen Server ein. Die Vorschau in G
 
 Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Google- und X-Anmeldung laufen über einen externen Dienst und gehören nicht auf einen abgeschotteten Server. Intern wird mit E-Mail und Passwort gearbeitet.
 
-Nachrichten gehen auch dann raus, wenn niemand die Seite offen hat. Dafür ruft der Server jede Minute `POST /api/pulse` auf. Ohne dieses Geheimnis passiert der Versand nur, solange ein angemeldetes Fenster offen ist.
+Nachrichten gehen raus, solange der Dienst läuft. Niemand muss angemeldet sein und kein Fenster muss offen bleiben. Der Prozess prüft alle 15 Sekunden selbst, hält die WhatsApp-Sitzung verbunden, legt fällige Regeltermine an und verschickt sie. Kalenderregeln über Microsoft Graph oder Exchange liest er alle fünf Minuten nach. Schlägt ein Versand kurz fehl, bleibt die Nachricht in der Warteschlange und wird mit Abstand erneut versucht.
 
 ## 1. Datenbank
 
@@ -77,7 +77,8 @@ Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
 Environment=VORLAUF_PULSE_SECRET=anderes-zufaelliges-geheimnis
 Environment=VORLAUF_ALLOW_PRIVATE_EWS=true
 ExecStart=/usr/bin/npm start
-Restart=on-failure
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -98,17 +99,12 @@ vorlauf.intern.example {
 
 Der Proxy muss `Host` und `X-Forwarded-Proto` durchreichen. Caddy tut das von selbst. Die Seite danach nur unter `BETTER_AUTH_URL` öffnen, nicht über die nackte IP.
 
-## 4. Versand ohne offenes Fenster
+## 4. Versand ohne Anmeldung
 
-Cron, jede Minute, auf dem App-Server:
+Sobald `npm start` läuft, verschickt der Prozess von selbst. Urlaub oder ein geschlossener Browser ändern daran nichts. `systemd` mit `Restart=always` holt den Dienst nach einem Absturz wieder hoch. Die WhatsApp-Sitzung verbindet sich aus `data/wa-auth` neu, ohne dass jemand den QR-Code noch einmal scannt.
 
-```bash
-* * * * * curl --silent --show-error --fail --max-time 30 -X POST -H "Authorization: Bearer $VORLAUF_PULSE_SECRET" https://vorlauf.intern.example/api/pulse
-```
+Ein Cronjob ist nicht nötig. Wer zusätzlich von außen prüfen will, kann weiter `POST /api/pulse` mit `VORLAUF_PULSE_SECRET` aufrufen. Ohne dieses Geheimnis antwortet der Pfad mit 404. Der interne Takt läuft davon unabhängig.
 
-Die Antwort nennt, wie viele Nachrichten gesendet wurden und wie viele noch warten. Ohne passendes Geheimnis antwortet der Pfad mit 401, und wenn `VORLAUF_PULSE_SECRET` gar nicht gesetzt ist, mit 404.
-
-Pro Aufruf gehen höchstens drei fällige Nachrichten raus. Eine Minute Abstand reicht für den normalen Betrieb.
 
 ## 5. Erstes Konto und WhatsApp
 

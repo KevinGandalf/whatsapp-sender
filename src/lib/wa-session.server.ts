@@ -31,6 +31,7 @@ let lastError: string | null = null;
 let sock: WASocket | null = null;
 let generation = 0;
 let reconnectDelay = 2000;
+let reconnectAt = 0;
 let connectTask: Promise<void> | null = null;
 const names = new Map<string, string>();
 let writes: Promise<unknown> = Promise.resolve();
@@ -215,6 +216,7 @@ async function connect(gen: number) {
       accountLabel = accountName(socket);
       lastError = null;
       reconnectDelay = 2000;
+      reconnectAt = 0;
     }
     if (update.connection === "close") {
       const code = (update.lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
@@ -229,9 +231,7 @@ async function connect(gen: number) {
       }
       const wait = reconnectDelay;
       reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
-      setTimeout(() => {
-        if (gen === generation) void ensureConnected();
-      }, wait);
+      reconnectAt = Date.now() + wait;
     }
   });
   socket.ev.on("messaging-history.set", (payload) => {
@@ -273,13 +273,20 @@ async function wipeAuth() {
   await sql`delete from wa_chats`;
 }
 
+export function keepAlive() {
+  if (!hasCreds()) return;
+  if (Date.now() < reconnectAt) return;
+  if (sock && (phase === "open" || phase === "qr" || phase === "connecting")) return;
+  void ensureConnected();
+}
+
 export async function linkSummary() {
-  if (hasCreds() && phase === "idle") void ensureConnected();
+  keepAlive();
   return { phase, name: accountLabel, linked: phase === "open" };
 }
 
 export async function sessionStatus() {
-  if (hasCreds() && phase === "idle") void ensureConnected();
+  keepAlive();
   return { phase, qrDataUrl, name: accountLabel, error: lastError, linked: phase === "open" };
 }
 
@@ -332,7 +339,7 @@ export async function sendToChat(jid: string, body: string): Promise<{ ok: boole
 }
 
 export async function listChats() {
-  if (hasCreds() && phase === "idle") void ensureConnected();
+  keepAlive();
   const sql = await getSql();
   const rows = await sql<{
     jid: string;
