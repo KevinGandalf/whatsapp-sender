@@ -12,8 +12,8 @@ import {
   type CalEvent,
   type Frequency,
   type RecipientRef,
-} from "@/lib/vorlauf";
-import { readEwsCalendar, readGraphCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
+} from "@/lib/wasender";
+import { readEwsCalendar, readGraphCalendar, sendWhatsAppMessage } from "@/lib/wasender-io.server";
 import { isSealed, openSecret, sealSecret } from "@/lib/field-crypto.server";
 import { startAlwaysOn } from "./always-on.server";
 
@@ -539,8 +539,8 @@ async function expandRoutines(sql: Sql, now: Date) {
   }
 }
 
-const dispatchGate = globalThis as { __vorlaufDispatch?: boolean };
-const calendarGate = globalThis as { __vorlaufCalendarAt?: number; __vorlaufCalendarBusy?: boolean };
+const dispatchGate = globalThis as { __wasenderDispatch?: boolean };
+const calendarGate = globalThis as { __wasenderCalendarAt?: number; __wasenderCalendarBusy?: boolean };
 
 function permanentSendError(error: string): boolean {
   const text = error.toLowerCase();
@@ -560,8 +560,8 @@ function retryDelayMs(attempts: number): number {
 }
 
 async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed: number; warning: string | null }> {
-  if (dispatchGate.__vorlaufDispatch) return { sent: 0, failed: 0, warning: null };
-  dispatchGate.__vorlaufDispatch = true;
+  if (dispatchGate.__wasenderDispatch) return { sent: 0, failed: 0, warning: null };
+  dispatchGate.__wasenderDispatch = true;
   try {
     await sql`update jobs set status = 'queued' where status = 'sending'`;
     const settings = await org(sql);
@@ -609,15 +609,15 @@ async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed:
     }
     return { sent, failed, warning: null };
   } finally {
-    dispatchGate.__vorlaufDispatch = false;
+    dispatchGate.__wasenderDispatch = false;
   }
 }
 
 async function materializeCalendars(sql: Sql) {
-  const last = calendarGate.__vorlaufCalendarAt ?? 0;
-  if (calendarGate.__vorlaufCalendarBusy || Date.now() - last < 5 * 60_000) return;
-  calendarGate.__vorlaufCalendarBusy = true;
-  calendarGate.__vorlaufCalendarAt = Date.now();
+  const last = calendarGate.__wasenderCalendarAt ?? 0;
+  if (calendarGate.__wasenderCalendarBusy || Date.now() - last < 5 * 60_000) return;
+  calendarGate.__wasenderCalendarBusy = true;
+  calendarGate.__wasenderCalendarAt = Date.now();
   try {
     const owners = await sql<{ owner_id: string }>`
       select distinct r.owner_id
@@ -634,16 +634,16 @@ async function materializeCalendars(sql: Sql) {
       }
     }
   } finally {
-    calendarGate.__vorlaufCalendarBusy = false;
+    calendarGate.__wasenderCalendarBusy = false;
   }
 }
 
 export function pulseConfigured(): boolean {
-  return Boolean(process.env.VORLAUF_PULSE_SECRET?.trim());
+  return Boolean(process.env.WASENDER_PULSE_SECRET?.trim());
 }
 
 export function pulseAuthorized(header: string | null): boolean {
-  const secret = process.env.VORLAUF_PULSE_SECRET?.trim();
+  const secret = process.env.WASENDER_PULSE_SECRET?.trim();
   const match = /^Bearer\s+(\S+)$/.exec(header ?? "");
   if (!secret || !match) return false;
   const given = Buffer.from(match[1]);

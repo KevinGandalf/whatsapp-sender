@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { XMLParser } from "fast-xml-parser";
 import httpntlm from "httpntlm";
-import type { CalEvent } from "./vorlauf.ts";
+import type { CalEvent } from "./wasender.ts";
 
 const GRAPH_HOSTS = new Set(["graph.microsoft.com", "graph.microsoft.us"]);
 
@@ -18,11 +18,11 @@ export type IoResult = {
 };
 
 function privateEwsAllowed(): boolean {
-  return process.env.VORLAUF_ALLOW_PRIVATE_EWS !== "false";
+  return process.env.WASENDER_ALLOW_PRIVATE_EWS !== "false";
 }
 
 function insecureEwsTls(): boolean {
-  return process.env.VORLAUF_EWS_INSECURE_TLS === "true";
+  return process.env.WASENDER_EWS_INSECURE_TLS === "true";
 }
 
 function isMetadataHost(host: string): boolean {
@@ -151,7 +151,7 @@ export async function readGraphCalendar(input: {
   if (token.length < 20) return { ok: false, events: [], error: "Graph-Zugriffstoken fehlt." };
   let path = "/v1.0/me/calendarView";
   if (input.calendarId.trim()) {
-    if (!/^[A-Za-z0-9_+=\/.-]{1,400}$/.test(input.calendarId.trim())) {
+    if (!/^[A-Za-z0-9_+=/.-]{1,400}$/.test(input.calendarId.trim())) {
       return { ok: false, events: [], error: "Kalender-ID hat ein unerwartetes Format." };
     }
     path = `/v1.0/me/calendars/${encodeURIComponent(input.calendarId.trim())}/calendarView`;

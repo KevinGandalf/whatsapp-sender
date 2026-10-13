@@ -20,7 +20,7 @@ const RoutineInput = z.object({
 });
 
 async function db() {
-  return import("./vorlauf-db.server");
+  return import("./wasender-db.server");
 }
 
 export const loadDesk = createServerFn({ method: "POST" })

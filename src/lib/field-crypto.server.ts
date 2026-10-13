@@ -11,14 +11,14 @@ function decodeKey(raw: string): Buffer {
   const text = raw.trim();
   const key = /^[0-9a-f]{64}$/i.test(text) ? Buffer.from(text, "hex") : Buffer.from(text, "base64");
   if (key.length !== 32) {
-    throw new Error("VORLAUF_DATA_KEY muss 32 Byte sein, als Base64 oder Hex.");
+    throw new Error("WASENDER_DATA_KEY muss 32 Byte sein, als Base64 oder Hex.");
   }
   return key;
 }
 
 function dataKey(): Buffer {
   if (cached) return cached;
-  const fromEnv = process.env.VORLAUF_DATA_KEY?.trim();
+  const fromEnv = process.env.WASENDER_DATA_KEY?.trim();
   if (fromEnv) {
     cached = decodeKey(fromEnv);
     return cached;
@@ -65,6 +65,6 @@ export function openSecret(value: string | null | undefined): string {
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
   } catch {
-    throw new Error("Datenschlüssel passt nicht zu den gespeicherten Nachrichten. VORLAUF_DATA_KEY oder data/data-key prüfen.");
+    throw new Error("Datenschlüssel passt nicht zu den gespeicherten Nachrichten. WASENDER_DATA_KEY oder data/data-key prüfen.");
   }
 }

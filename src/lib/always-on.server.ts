@@ -1,11 +1,11 @@
-const marker = globalThis as { __vorlaufAlwaysOn?: boolean };
+const marker = globalThis as { __wasenderAlwaysOn?: boolean };
 
 export function startAlwaysOn() {
-  if (marker.__vorlaufAlwaysOn) return;
-  if (process.env.VORLAUF_DISABLE_TICK === "true") return;
-  marker.__vorlaufAlwaysOn = true;
+  if (marker.__wasenderAlwaysOn) return;
+  if (process.env.WASENDER_DISABLE_TICK === "true") return;
+  marker.__wasenderAlwaysOn = true;
   const tick = () => {
-    void import("./vorlauf-db.server")
+    void import("./wasender-db.server")
       .then((mod) => mod.systemPulse())
       .catch((err: unknown) => {
         console.error("[wasender] Versand fehlgeschlagen:", err instanceof Error ? err.message : err);

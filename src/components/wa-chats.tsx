@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { listWhatsAppChats, listWhatsAppMessages, sendWhatsAppChat } from "@/lib/vorlauf-actions";
-import { formatClock, formatWhen } from "@/lib/vorlauf";
+import { listWhatsAppChats, listWhatsAppMessages, sendWhatsAppChat } from "@/lib/wasender-actions";
+import { formatClock, formatWhen } from "@/lib/wasender";
 import { Button, TextArea } from "@/components/ui";
 
 type Chat = Awaited<ReturnType<typeof listWhatsAppChats>>[number];

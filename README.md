@@ -38,16 +38,19 @@ Die Variablen gehören in die Dienstumgebung, nicht ins Repository. `BETTER_AUTH
 export DATABASE_URL="postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender"
 export BETTER_AUTH_URL="https://wasender.intern.example"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
-export VORLAUF_DATA_KEY="$(openssl rand -base64 32)"
+export WASENDER_DATA_KEY="$(openssl rand -base64 32)"
+export WASENDER_PULSE_SECRET="$(openssl rand -base64 32)"
+# Nur setzen, wenn Exchange im eigenen Netz liegt:
+# export WASENDER_ALLOW_PRIVATE_EWS=true
 # Internes Zertifikat von Exchange, falls der Server ihm nicht vertraut:
 # export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/interne-ca.pem
 # Nur wenn Exchange ein selbstsigniertes Zertifikat hat und keine interne CA vorliegt:
-# export VORLAUF_EWS_INSECURE_TLS=true
+# export WASENDER_EWS_INSECURE_TLS=true
 
 npm run build
 ```
 
-`BETTER_AUTH_SECRET` und `VORLAUF_DATA_KEY` danach nicht mehr wechseln. Der erste signiert die Anmeldung, der zweite entschlüsselt Nachrichten und Empfänger. Fehlt der Datenschlüssel, legt der Dienst einmalig `data/data-key` an. Diese Datei oder die Variable sichern. Ohne sie sind die gespeicherten Texte nicht mehr lesbar.
+`BETTER_AUTH_SECRET` und `WASENDER_DATA_KEY` danach nicht mehr wechseln. Der erste signiert die Anmeldung, der zweite entschlüsselt Nachrichten und Empfänger. Fehlt der Datenschlüssel, legt der Dienst einmalig `data/data-key` an. Diese Datei oder die Variable sichern. Ohne sie sind die gespeicherten Texte nicht mehr lesbar.
 
 ## 3. Dienst starten
 
@@ -74,9 +77,10 @@ Environment=NODE_ENV=production
 Environment=DATABASE_URL=postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender
 Environment=BETTER_AUTH_URL=https://wasender.intern.example
 Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
-Environment=VORLAUF_DATA_KEY=base64-aus-openssl
-Environment=VORLAUF_PULSE_SECRET=anderes-zufaelliges-geheimnis
-Environment=VORLAUF_EWS_INSECURE_TLS=false
+Environment=WASENDER_DATA_KEY=base64-aus-openssl
+Environment=WASENDER_PULSE_SECRET=anderes-zufaelliges-geheimnis
+Environment=WASENDER_ALLOW_PRIVATE_EWS=true
+Environment=WASENDER_EWS_INSECURE_TLS=false
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=5
@@ -104,7 +108,7 @@ Der Proxy muss `Host` und `X-Forwarded-Proto` durchreichen. Caddy tut das von se
 
 Sobald `npm start` läuft, verschickt der Prozess von selbst. Urlaub oder ein geschlossener Browser ändern daran nichts. `systemd` mit `Restart=always` holt den Dienst nach einem Absturz wieder hoch. Die WhatsApp-Sitzung verbindet sich aus `data/wa-auth` neu, ohne dass jemand den QR-Code noch einmal scannt.
 
-Ein Cronjob ist nicht nötig. Wer zusätzlich von außen prüfen will, kann weiter `POST /api/pulse` mit `VORLAUF_PULSE_SECRET` aufrufen. Ohne dieses Geheimnis antwortet der Pfad mit 404. Der interne Takt läuft davon unabhängig.
+Ein Cronjob ist nicht nötig. Wer zusätzlich von außen prüfen will, kann weiter `POST /api/pulse` mit `WASENDER_PULSE_SECRET` aufrufen. Ohne dieses Geheimnis antwortet der Pfad mit 404. Der interne Takt läuft davon unabhängig.
 
 
 ## 5. Erstes Konto und WhatsApp
@@ -128,7 +132,7 @@ WhatsApp muss vom Server aus `web.whatsapp.com` erreichen. Medien werden nicht h
 | Exchange EWS | Lokaler Exchange. Adresse `https://exchange.firma.local/EWS/Exchange.asmx`. Anmeldung NTLM als `DOMÄNE\benutzer` oder `benutzer@firma.local`, sonst Basic oder Bearer |
 | Microsoft 365 | Graph-Token mit `Calendars.Read`, braucht ausgehend `graph.microsoft.com` |
 
-Private Namen, `.local` und Adressen im eigenen Netz sind für EWS erlaubt. Cloud-Metadaten-Adressen bleiben gesperrt. HTTP nur im privaten Netz, sonst HTTPS. Kennwort nicht in die URL schreiben. Vertraut der Server dem Exchange-Zertifikat nicht, `NODE_EXTRA_CA_CERTS` setzen. `VORLAUF_EWS_INSECURE_TLS=true` ist nur der Notnagel für ein selbstsigniertes Zertifikat.
+Private Namen, `.local` und Adressen im eigenen Netz sind für EWS erlaubt. Mit `WASENDER_ALLOW_PRIVATE_EWS=false` lässt sich das abschalten. Cloud-Metadaten-Adressen bleiben gesperrt. HTTP nur im privaten Netz, sonst HTTPS. Kennwort nicht in die URL schreiben. Vertraut der Server dem Exchange-Zertifikat nicht, `NODE_EXTRA_CA_CERTS` setzen. `WASENDER_EWS_INSECURE_TLS=true` ist nur der Notnagel für ein selbstsigniertes Zertifikat.
 
 Regeltermine hängen nicht am Kalender. Sie laufen täglich, an gewählten Wochentagen oder monatlich am Tag 1–28.
 
@@ -154,7 +158,7 @@ sudo systemctl restart wasender
 
 ## Was nicht ins Repository gehört
 
-Zugangstoken, Datenbankpasswort, Anmeldgeheimnis und `VORLAUF_DATA_KEY` bleiben in der Dienstumgebung. `data/data-key` und `data/wa-auth` ebenfalls nicht einchecken.
+Zugangstoken, Datenbankpasswort, Anmeldgeheimnis und `WASENDER_DATA_KEY` bleiben in der Dienstumgebung. `data/data-key` und `data/wa-auth` ebenfalls nicht einchecken.
 
 Nachrichten, Empfängernamen, Telefonnummern, Chatverläufe und die hinterlegten Kalender- und WhatsApp-Zugänge liegen in der Datenbank als AES-256-GCM. Zeiten, Status und die E-Mail der Anmeldung bleiben lesbar, sonst kann der Dienst nicht planen und nicht anmelden. Bestehende Klartextzeilen werden beim nächsten Start verschlüsselt.
 

@@ -19,7 +19,7 @@ import {
   upsertContact,
   upsertRoutine,
   upsertRule,
-} from "@/lib/vorlauf-actions";
+} from "@/lib/wasender-actions";
 import {
   DEFAULT_TEMPLATE,
   dayKey,
@@ -31,10 +31,10 @@ import {
   type CalEvent,
   type Frequency,
   type RecipientRef,
-} from "@/lib/vorlauf";
+} from "@/lib/wasender";
 import { Button, Field, Panel, TextArea, TextInput } from "@/components/ui";
 import { Chats } from "@/components/wa-chats";
-import { startWhatsApp, stopWhatsApp, whatsAppStatus } from "@/lib/vorlauf-actions";
+import { startWhatsApp, stopWhatsApp, whatsAppStatus } from "@/lib/wasender-actions";
 
 type DeskData = Awaited<ReturnType<typeof loadDesk>>;
 type ViewId = "chats" | "kalender" | "regeln" | "termine" | "ausgang" | "empfaenger" | "konten" | "anbindung";
@@ -49,18 +49,11 @@ const WEEKDAYS = [
   [7, "So"],
 ] as const;
 
-export function VorlaufApp() {
+export function WasenderApp() {
   const user = useCurrentUser();
   const [data, setData] = useState<DeskData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>("chats");
-
-  const refresh = async () => {
-    const next = await loadDesk();
-    setData(next);
-    setError(null);
-    return next;
-  };
 
   useEffect(() => {
     if (!user?.id) return;

@@ -184,6 +184,7 @@ async function connect(gen: number) {
   phase = "connecting";
   lastError = null;
   await mkdir(AUTH_DIR, { recursive: true });
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- Baileys SDK helper, not a React hook despite the "use" prefix
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   let version: [number, number, number] | undefined;
   try {
