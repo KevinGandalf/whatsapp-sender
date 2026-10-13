@@ -24,7 +24,7 @@ if (missing.length > 0) {
   process.exit(1);
 }
 if (!process.env.WASENDER_PULSE_SECRET?.trim()) {
-  console.warn("WASENDER_PULSE_SECRET ist leer. Regeltermine laufen nur, solange jemand Wasender im Browser offen hat.");
+  console.warn("WASENDER_PULSE_SECRET ist leer. Der Versand läuft trotzdem im Prozess. Der externe Pfad /api/pulse bleibt aus.");
 }
 
 const host = process.env.HOST?.trim() || "127.0.0.1";

@@ -1,19 +1,19 @@
-# Wasender
+# WASender
 
 WhatsApp-Nachrichten aus dem Kalender und aus wiederkehrenden Terminen. Mehrere Konten teilen sich eine Empfängerliste. Admins verbinden WhatsApp und vergeben Rollen, Nutzer planen ihre eigenen Sendungen.
 
-Diese Anleitung richtet Wasender auf einem internen Server ein. Die Vorschau in Grok bleibt davon unberührt.
+Diese Anleitung richtet WASender auf einem internen Server ein.
 
 ## Was der Server können muss
 
 - Node.js 22 und npm
 - PostgreSQL 16, nur vom App-Server aus erreichbar
-- Ausgehend HTTPS nach `graph.facebook.com` (WhatsApp Cloud API)
+- Ausgehend HTTPS nach `web.whatsapp.com` (verknüpftes Gerät, wie WhatsApp Web) und, falls genutzt, nach `graph.facebook.com`
 - Ein HTTPS-Name im internen Netz, zum Beispiel `https://wasender.intern.example`
 
-Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Google- und X-Anmeldung laufen über einen externen Dienst und gehören nicht auf einen abgeschotteten Server. Intern wird mit E-Mail und Passwort gearbeitet.
+Die Anmeldung setzt ein Secure-Cookie. Deshalb muss der Browser die Seite über HTTPS öffnen. `http://localhost` ist die einzige Ausnahme. Angemeldet wird mit E-Mail und Passwort. Es gibt keine Anmeldung über Google oder Grok.
 
-Nachrichten gehen auch dann raus, wenn niemand die Seite offen hat. Dafür ruft der Server jede Minute `POST /api/pulse` auf. Ohne dieses Geheimnis passiert der Versand nur, solange ein angemeldetes Fenster offen ist.
+Nachrichten gehen raus, solange der Dienst läuft. Niemand muss angemeldet sein und kein Fenster muss offen bleiben. Der Prozess prüft alle 15 Sekunden selbst, hält die WhatsApp-Sitzung verbunden, legt fällige Regeltermine an und verschickt sie. Kalenderregeln über Microsoft Graph oder Exchange liest er alle fünf Minuten nach. Schlägt ein Versand kurz fehl, bleibt die Nachricht in der Warteschlange und wird mit Abstand erneut versucht.
 
 ## 1. Datenbank
 
@@ -38,16 +38,19 @@ Die Variablen gehören in die Dienstumgebung, nicht ins Repository. `BETTER_AUTH
 export DATABASE_URL="postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender"
 export BETTER_AUTH_URL="https://wasender.intern.example"
 export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
+export WASENDER_DATA_KEY="$(openssl rand -base64 32)"
 export WASENDER_PULSE_SECRET="$(openssl rand -base64 32)"
 # Nur setzen, wenn Exchange im eigenen Netz liegt:
 # export WASENDER_ALLOW_PRIVATE_EWS=true
-# Interne Zertifizierungsstelle, falls Exchange ihr vertraut:
+# Internes Zertifikat von Exchange, falls der Server ihm nicht vertraut:
 # export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/interne-ca.pem
+# Nur wenn Exchange ein selbstsigniertes Zertifikat hat und keine interne CA vorliegt:
+# export WASENDER_EWS_INSECURE_TLS=true
 
 npm run build
 ```
 
-`BETTER_AUTH_SECRET` danach nicht mehr wechseln, sonst sind alle Sitzungen ungültig.
+`BETTER_AUTH_SECRET` und `WASENDER_DATA_KEY` danach nicht mehr wechseln. Der erste signiert die Anmeldung, der zweite entschlüsselt Nachrichten und Empfänger. Fehlt der Datenschlüssel, legt der Dienst einmalig `data/data-key` an. Diese Datei oder die Variable sichern. Ohne sie sind die gespeicherten Texte nicht mehr lesbar.
 
 ## 3. Dienst starten
 
@@ -63,7 +66,7 @@ Beispiel für systemd, Datei `/etc/systemd/system/wasender.service`:
 
 ```ini
 [Unit]
-Description=Wasender
+Description=WASender
 After=network.target postgresql.service
 
 [Service]
@@ -74,10 +77,13 @@ Environment=NODE_ENV=production
 Environment=DATABASE_URL=postgresql://wasender:GEHEIM@127.0.0.1:5432/wasender
 Environment=BETTER_AUTH_URL=https://wasender.intern.example
 Environment=BETTER_AUTH_SECRET=langes-zufaelliges-geheimnis
+Environment=WASENDER_DATA_KEY=base64-aus-openssl
 Environment=WASENDER_PULSE_SECRET=anderes-zufaelliges-geheimnis
 Environment=WASENDER_ALLOW_PRIVATE_EWS=true
+Environment=WASENDER_EWS_INSECURE_TLS=false
 ExecStart=/usr/bin/npm start
-Restart=on-failure
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -98,42 +104,35 @@ wasender.intern.example {
 
 Der Proxy muss `Host` und `X-Forwarded-Proto` durchreichen. Caddy tut das von selbst. Die Seite danach nur unter `BETTER_AUTH_URL` öffnen, nicht über die nackte IP.
 
-## 4. Versand ohne offenes Fenster
+## 4. Versand ohne Anmeldung
 
-Cron, jede Minute, auf dem App-Server:
+Sobald `npm start` läuft, verschickt der Prozess von selbst. Urlaub oder ein geschlossener Browser ändern daran nichts. `systemd` mit `Restart=always` holt den Dienst nach einem Absturz wieder hoch. Die WhatsApp-Sitzung verbindet sich aus `data/wa-auth` neu, ohne dass jemand den QR-Code noch einmal scannt.
 
-```bash
-* * * * * curl --silent --show-error --fail --max-time 30 -X POST -H "Authorization: Bearer $WASENDER_PULSE_SECRET" https://wasender.intern.example/api/pulse
-```
+Ein Cronjob ist nicht nötig. Wer zusätzlich von außen prüfen will, kann weiter `POST /api/pulse` mit `WASENDER_PULSE_SECRET` aufrufen. Ohne dieses Geheimnis antwortet der Pfad mit 404. Der interne Takt läuft davon unabhängig.
 
-Die Antwort nennt, wie viele Nachrichten gesendet wurden und wie viele noch warten. Ohne passendes Geheimnis antwortet der Pfad mit 401, und wenn `WASENDER_PULSE_SECRET` gar nicht gesetzt ist, mit 404.
-
-Pro Aufruf gehen höchstens drei fällige Nachrichten raus. Eine Minute Abstand reicht für den normalen Betrieb.
 
 ## 5. Erstes Konto und WhatsApp
 
-1. `https://wasender.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin. Weitere Personen registrieren sich selbst.
-2. Unter **Konten** die Rolle setzen und eine Telefonnummer eintragen. Nur Konten mit Nummer tauchen in der Empfängerauswahl auf.
-3. Unter **Empfänger** Kontakte anlegen, die kein Konto brauchen.
-4. Unter **Anbindung** die WhatsApp Cloud API eintragen:
-   - In der [Meta for Developers](https://developers.facebook.com/) eine WhatsApp-Business-App
-   - Phone Number ID der Absendernummer
-   - Dauerhaftes Zugriffstoken mit der Berechtigung `whatsapp_business_messaging`
-   - Landesvorwahl `49` und Zeitzone `Europe/Berlin`, falls nichts anderes gilt
-5. Die Vorlage im WhatsApp-Manager muss für Nachrichten ausserhalb des 24-Stunden-Fensters freigegeben sein, sonst lehnt Meta den Versand ab. Wasender schickt den Text als normale Session-Nachricht.
+1. `https://wasender.intern.example` öffnen und das erste Konto anlegen. Dieses Konto ist Admin.
+2. Unter **Anbindung** auf **Code anzeigen** gehen. Am Telefon: WhatsApp, verknüpfte Geräte, Gerät hinzufügen, Code scannen. Das ist dieselbe Art Sitzung wie WhatsApp Web. Sie bleibt auf dem Server, solange der Dienst läuft, und nach einem Neustart ohne neuen Code weiter, weil die Anmeldung unter `data/wa-auth` liegt. Diesen Ordner sichern und nicht ins Git legen.
+3. Unter **Chats** stehen danach die Unterhaltungen und die letzten Nachrichten. Neue Nachrichten kommen von selbst nach. Antworten aus dem Chat gehen über diese Sitzung.
+4. Geplante Regeltermine benutzen dieselbe Sitzung. Die Cloud API darunter ist nur der Ersatz, falls kein Gerät verknüpft ist.
+5. Unter **Konten** Rollen und Telefonnummern setzen. Unter **Empfänger** Kontakte anlegen, die kein Konto brauchen.
 
-Das Token bleibt in der Datenbank. Die Oberfläche zeigt später nur die letzten vier Zeichen.
+Cloud API, falls doch benötigt: Phone Number ID und ein dauerhaftes Token mit `whatsapp_business_messaging` aus der Meta-App. Das Token bleibt in der Datenbank. Die Oberfläche zeigt später nur die letzten vier Zeichen.
+
+WhatsApp muss vom Server aus `web.whatsapp.com` erreichen. Medien werden nicht heruntergeladen, im Verlauf steht dann nur die Art, zum Beispiel „Bild“. WhatsApp kann so eine Sitzung trennen. Sie ist für den eigenen Ablauf gedacht, nicht für Massenversand.
+
 
 ## 6. Kalender
 
 | Quelle | Wann |
 |---|---|
 | Beispiel | Nur zum Ausprobieren, ohne Zugang |
+| Exchange EWS | Lokaler Exchange. Adresse `https://exchange.firma.local/EWS/Exchange.asmx`. Anmeldung NTLM als `DOMÄNE\benutzer` oder `benutzer@firma.local`, sonst Basic oder Bearer |
 | Microsoft 365 | Graph-Token mit `Calendars.Read`, braucht ausgehend `graph.microsoft.com` |
-| Exchange EWS | Adresse `https://mail.firma.example/EWS/Exchange.asmx`, Benutzer und Kennwort oder Bearer-Token |
-| Outlook über Grok | Nur in der Grok-Vorschau, nicht auf dem internen Server |
 
-Private Adressen, `.local` und `.internal` sind abgelehnt, bis `WASENDER_ALLOW_PRIVATE_EWS=true` gesetzt ist. Cloud-Metadaten-Adressen bleiben auch dann gesperrt. EWS muss HTTPS sprechen. Kennwort nicht in die URL schreiben.
+Private Namen, `.local` und Adressen im eigenen Netz sind für EWS erlaubt. Mit `WASENDER_ALLOW_PRIVATE_EWS=false` lässt sich das abschalten. Cloud-Metadaten-Adressen bleiben gesperrt. HTTP nur im privaten Netz, sonst HTTPS. Kennwort nicht in die URL schreiben. Vertraut der Server dem Exchange-Zertifikat nicht, `NODE_EXTRA_CA_CERTS` setzen. `WASENDER_EWS_INSECURE_TLS=true` ist nur der Notnagel für ein selbstsigniertes Zertifikat.
 
 Regeltermine hängen nicht am Kalender. Sie laufen täglich, an gewählten Wochentagen oder monatlich am Tag 1–28.
 
@@ -159,4 +158,7 @@ sudo systemctl restart wasender
 
 ## Was nicht ins Repository gehört
 
-Zugangstoken, Datenbankpasswort und die beiden Geheimnisse bleiben in der Dienstumgebung. Eine `.env` im Projektordner wird nicht mit ausgeliefert und sollte dort auch nicht liegen bleiben.
+Zugangstoken, Datenbankpasswort, Anmeldgeheimnis und `WASENDER_DATA_KEY` bleiben in der Dienstumgebung. `data/data-key` und `data/wa-auth` ebenfalls nicht einchecken.
+
+Nachrichten, Empfängernamen, Telefonnummern, Chatverläufe und die hinterlegten Kalender- und WhatsApp-Zugänge liegen in der Datenbank als AES-256-GCM. Zeiten, Status und die E-Mail der Anmeldung bleiben lesbar, sonst kann der Dienst nicht planen und nicht anmelden. Bestehende Klartextzeilen werden beim nächsten Start verschlüsselt.
+

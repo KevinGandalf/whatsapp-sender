@@ -33,9 +33,11 @@ import {
   type RecipientRef,
 } from "@/lib/wasender";
 import { Button, Field, Panel, TextArea, TextInput } from "@/components/ui";
+import { Chats } from "@/components/wa-chats";
+import { startWhatsApp, stopWhatsApp, whatsAppStatus } from "@/lib/wasender-actions";
 
 type DeskData = Awaited<ReturnType<typeof loadDesk>>;
-type ViewId = "kalender" | "regeln" | "termine" | "ausgang" | "empfaenger" | "konten" | "anbindung";
+type ViewId = "chats" | "kalender" | "regeln" | "termine" | "ausgang" | "empfaenger" | "konten" | "anbindung";
 
 const WEEKDAYS = [
   [1, "Mo"],
@@ -51,7 +53,7 @@ export function WasenderApp() {
   const user = useCurrentUser();
   const [data, setData] = useState<DeskData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>("termine");
+  const [view, setView] = useState<ViewId>("chats");
 
   useEffect(() => {
     if (!user?.id) return;
@@ -83,7 +85,7 @@ export function WasenderApp() {
   if (!data) {
     return (
       <main className="mx-auto max-w-6xl px-4 py-8">
-        <h1 className="font-display text-4xl text-fg">Wasender</h1>
+        <h1 className="font-display text-4xl text-fg">WASender</h1>
         <p className="mt-3 text-sm text-muted">{error ?? "Leitstand wird geladen."}</p>
       </main>
     );
@@ -91,6 +93,7 @@ export function WasenderApp() {
 
   const admin = data.role === "admin";
   const views: { id: ViewId; label: string }[] = [
+    { id: "chats", label: "Chats" },
     { id: "termine", label: "Regeltermine" },
     { id: "kalender", label: "Kalender" },
     { id: "regeln", label: "Regeln" },
@@ -110,7 +113,7 @@ export function WasenderApp() {
       <aside className="flex min-w-0 flex-col gap-6">
         <div>
           <p className="text-xs font-medium tracking-widest text-subtle uppercase">{admin ? "Admin" : "Nutzer"}</p>
-          <h1 className="font-display text-4xl leading-none text-fg">Wasender</h1>
+          <h1 className="font-display text-4xl leading-none text-fg">WASender</h1>
           <p className="mt-3 text-sm leading-6 text-muted">{data.displayName}</p>
         </div>
         <nav className="flex w-full min-w-0 gap-2 overflow-x-auto lg:flex-col" aria-label="Bereiche">
@@ -135,7 +138,11 @@ export function WasenderApp() {
             {next ? formatClock(next.sendAt, data.org.timeZone) : "—"}
           </p>
           <p className="mt-3 text-xs leading-5 text-subtle">
-            {data.org.configured ? "Dispatcher läuft, solange dieses Fenster offen ist." : "WhatsApp verbindet der Admin."}
+            {data.org.linked
+              ? `WhatsApp ${data.org.linkName || "ist verbunden"}. Versand läuft auf dem Server, auch ohne Anmeldung.`
+              : data.org.configured
+                ? "Versand läuft auf dem Server über die Cloud API, auch ohne Anmeldung."
+                : "WhatsApp verbindet der Admin. Danach geht der Versand ohne Anmeldung raus."}
           </p>
           <div className="mt-3">
             <UserButton />
@@ -144,6 +151,7 @@ export function WasenderApp() {
       </aside>
       <main className="grid min-w-0 gap-4">
         {error ? <p className="text-sm text-danger">{error}</p> : null}
+        {view === "chats" ? <Chats timeZone={data.org.timeZone} linked={data.org.linked} /> : null}
         {view === "termine" ? <Routines data={data} onChange={setData} onError={setError} /> : null}
         {view === "kalender" ? <Calendar data={data} onChange={setData} onError={setError} /> : null}
         {view === "regeln" ? <Rules data={data} onChange={setData} onError={setError} /> : null}
@@ -220,7 +228,7 @@ async function commit(run: () => Promise<DeskData>, onChange: (data: DeskData) =
 function Routines({ data, onChange, onError }: { data: DeskData; onChange: (data: DeskData) => void; onError: (message: string | null) => void }) {
   const [draft, setDraft] = useState({
     title: "",
-    body: "Kurze Erinnerung aus Wasender.",
+    body: "Kurze Erinnerung aus WASender.",
     frequency: "weekly" as Frequency,
     weekdays: [1, 2, 3, 4, 5],
     monthDay: 1,
@@ -504,13 +512,13 @@ function Rules({ data, onChange, onError }: { data: DeskData; onChange: (data: D
 function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data: DeskData) => void; onError: (message: string | null) => void }) {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [note, setNote] = useState<string | null>(null);
-  const [source, setSource] = useState(data.source.source);
+  const [source, setSource] = useState(data.source.source === "outlook" ? "ews" : data.source.source);
   const [graphToken, setGraphToken] = useState("");
   const [graphCalendarId, setGraphCalendarId] = useState(data.source.graphCalendarId);
   const [ewsUrl, setEwsUrl] = useState(data.source.ewsUrl);
   const [ewsUser, setEwsUser] = useState(data.source.ewsUser);
   const [ewsSecret, setEwsSecret] = useState("");
-  const [ewsAuth, setEwsAuth] = useState<"basic" | "bearer">(data.source.ewsAuth === "bearer" ? "bearer" : "basic");
+  const [ewsAuth, setEwsAuth] = useState<"basic" | "bearer" | "ntlm">(data.source.ewsAuth);
   const groups = useMemo(() => {
     const map = new Map<string, CalEvent[]>();
     for (const event of [...events].sort((a, b) => a.start.localeCompare(b.start))) {
@@ -546,9 +554,8 @@ function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data
         {(
           [
             ["demo", "Beispiel"],
-            ["outlook", "Outlook über Grok"],
-            ["graph", "Microsoft 365"],
             ["ews", "Exchange EWS"],
+            ["graph", "Microsoft 365"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -573,29 +580,21 @@ function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data
       ) : null}
       {source === "ews" ? (
         <div className="mb-4 grid gap-3">
-          <Field label="EWS-Adresse" hint="Öffentliches HTTPS. Heimnetz-Adressen werden nicht aufgerufen.">
+          <Field label="EWS-Adresse" hint="Lokal zum Beispiel https://exchange.firma.local/EWS/Exchange.asmx">
             <TextInput value={ewsUrl} onChange={(event) => setEwsUrl(event.target.value)} />
           </Field>
           <Field label="Anmeldung">
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["basic", "Benutzer und Kennwort"],
-                  ["bearer", "Bearer-Token"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setEwsAuth(id)}
-                  className={ewsAuth === id ? "min-h-11 rounded-lg bg-accent px-3 text-sm text-accent-fg" : "min-h-11 rounded-lg border border-line px-3 text-sm"}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <select
+              className="min-h-11 rounded-lg border border-line bg-bg px-3 text-sm text-fg"
+              value={ewsAuth}
+              onChange={(event) => setEwsAuth(event.target.value === "basic" || event.target.value === "bearer" ? event.target.value : "ntlm")}
+            >
+              <option value="ntlm">NTLM, lokaler Exchange</option>
+              <option value="basic">Basic</option>
+              <option value="bearer">Bearer</option>
+            </select>
           </Field>
-          <Field label="Benutzer">
+          <Field label="Benutzer" hint={ewsAuth === "ntlm" ? "DOMÄNE\\benutzer oder benutzer@firma.local" : "Postfach"}>
             <TextInput value={ewsUser} onChange={(event) => setEwsUser(event.target.value)} />
           </Field>
           <Field label={ewsAuth === "bearer" ? "Bearer-Token" : "Kennwort"}>
@@ -695,8 +694,67 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
   const [accessToken, setAccessToken] = useState("");
   const [countryCode, setCountryCode] = useState(data.org.countryCode);
   const [timeZone, setTimeZone] = useState(data.org.timeZone);
+  const [link, setLink] = useState<{ phase: string; qrDataUrl: string | null; name: string; error: string | null; linked: boolean } | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const tick = () => {
+      void whatsAppStatus()
+        .then((next) => {
+          if (!stop) setLink(next);
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = window.setInterval(tick, 2500);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   return (
-    <Panel kicker="WhatsApp Cloud API" title="Anbindung">
+    <div className="grid gap-4">
+      <Panel kicker="WhatsApp Web" title="Gerät verknüpfen">
+        <div className="grid gap-4">
+          <p className="text-sm leading-6 text-muted">
+            Auf dem Telefon: WhatsApp, verknüpfte Geräte, Gerät hinzufügen. Der Code gilt nur für diesen Server. Die Sitzung bleibt
+            liegen, auch wenn niemand die Seite offen hat.
+          </p>
+          {link?.linked ? (
+            <p className="text-sm text-fg">Verbunden als {link.name || "WhatsApp"}.</p>
+          ) : link?.qrDataUrl ? (
+            <img src={link.qrDataUrl} alt="QR-Code zum Verknüpfen" className="h-56 w-56 rounded-2xl bg-white p-2" />
+          ) : (
+            <p className="text-sm text-subtle">{link?.phase === "connecting" ? "Verbindung wird aufgebaut." : "Noch nicht verknüpft."}</p>
+          )}
+          {link?.error ? <p className="text-sm text-danger">{link.error}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => {
+                void startWhatsApp()
+                  .then(setLink)
+                  .catch((caught: unknown) => onError(caught instanceof Error ? caught.message : "Verknüpfen fehlgeschlagen."));
+              }}
+            >
+              {link?.qrDataUrl ? "Code erneuern" : "Code anzeigen"}
+            </Button>
+            {link?.linked ? (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  void stopWhatsApp()
+                    .then(setLink)
+                    .catch((caught: unknown) => onError(caught instanceof Error ? caught.message : "Abmelden fehlgeschlagen."));
+                }}
+              >
+                Gerät abmelden
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Panel>
+      <Panel kicker="Optional" title="Cloud API">
       <form
         className="grid gap-4"
         onSubmit={(event) => {
@@ -709,7 +767,8 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
         }}
       >
         <p className="text-sm leading-6 text-muted">
-          Eine Nummer für alle Konten. Token bleibt auf dem Server. {data.org.configured ? `Gespeichert ${data.org.tokenHint}.` : "Noch nicht verbunden."}
+          Nur als Ersatz, wenn keine Geräte-Sitzung verbunden ist. Geplante Nachrichten gehen sonst über das verknüpfte Telefon.
+          {data.org.tokenHint ? ` Token ${data.org.tokenHint}.` : ""}
         </p>
         <Field label="Phone Number ID">
           <TextInput value={phoneNumberId} onChange={(event) => setPhoneNumberId(event.target.value)} />
@@ -728,5 +787,6 @@ function Org({ data, onChange, onError }: { data: DeskData; onChange: (data: Des
         <Button type="submit">Speichern</Button>
       </form>
     </Panel>
+    </div>
   );
 }

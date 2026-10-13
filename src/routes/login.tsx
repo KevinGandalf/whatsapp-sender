@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
+import { authClient, authEnabled } from "@/lib/auth/client";
 import { Button, Field, TextInput } from "@/components/ui";
 
 export const Route = createFileRoute("/login")({ component: Login });
@@ -38,7 +38,7 @@ function Login() {
     <main className="mx-auto grid min-h-screen max-w-md place-items-center px-4 py-10">
       <div className="w-full rounded-3xl border border-line bg-surface p-5">
         <p className="text-xs font-medium tracking-widest text-subtle uppercase">Leitstand</p>
-        <h1 className="font-display text-4xl text-fg">Wasender</h1>
+        <h1 className="font-display text-4xl text-fg">WASender</h1>
         <p className="mt-2 text-sm leading-6 text-muted">
           Das erste Konto wird Admin und legt Empfänger, WhatsApp und weitere Konten an.
         </p>
@@ -79,13 +79,6 @@ function Login() {
             >
               {mode === "up" ? "Ich habe schon ein Konto" : "Neues Konto anlegen"}
             </button>
-            <div className="grid gap-2">
-              {GROK_PROVIDERS.map((provider) => (
-                <Button key={provider.providerId} variant="ghost" onClick={() => signIn(provider.providerId, { callbackURL: "/" })}>
-                  Weiter mit {provider.label}
-                </Button>
-              ))}
-            </div>
           </form>
         ) : (
           <p className="mt-4 text-sm text-muted">Anmeldung ist aus.</p>
