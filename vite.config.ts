@@ -166,6 +166,10 @@ export default defineConfig(({ command, isPreview }) => ({
       ? [
           nitro({
             preset: "vercel",
+            // Auto-registers server/plugins/* on deploys. Nitro v3 defaults
+            // serverDir to false, so without this the always-on send tick
+            // (server/plugins/always-on.ts) is silently unwired on Vercel.
+            serverDir: "./server",
           }),
         ]
       : []),
