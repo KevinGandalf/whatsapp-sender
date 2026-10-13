@@ -4,7 +4,7 @@ export const Route = createFileRoute("/api/pulse")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const { pulseAuthorized, pulseConfigured, systemPulse } = await import("@/lib/vorlauf-db.server");
+        const { pulseAuthorized, pulseConfigured, systemPulse } = await import("@/lib/wasender-db.server");
         if (!pulseConfigured()) return new Response(null, { status: 404 });
         if (!pulseAuthorized(request.headers.get("authorization"))) {
           return new Response(null, { status: 401 });

@@ -23,8 +23,8 @@ if (missing.length > 0) {
   console.error(`Umgebungsvariablen fehlen: ${missing.join(", ")}`);
   process.exit(1);
 }
-if (!process.env.VORLAUF_PULSE_SECRET?.trim()) {
-  console.warn("VORLAUF_PULSE_SECRET ist leer. Regeltermine laufen nur, solange jemand Vorlauf im Browser offen hat.");
+if (!process.env.WASENDER_PULSE_SECRET?.trim()) {
+  console.warn("WASENDER_PULSE_SECRET ist leer. Regeltermine laufen nur, solange jemand Wasender im Browser offen hat.");
 }
 
 const host = process.env.HOST?.trim() || "127.0.0.1";

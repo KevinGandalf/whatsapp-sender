@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { VorlaufApp } from "@/components/vorlauf-app";
+import { WasenderApp } from "@/components/wasender-app";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -11,11 +11,11 @@ function Home() {
     return (
       <main className="mx-auto max-w-6xl px-4 py-8">
         <p className="text-xs font-medium tracking-widest text-subtle uppercase">Leitstand</p>
-        <h1 className="font-display text-4xl text-fg">Vorlauf</h1>
+        <h1 className="font-display text-4xl text-fg">Wasender</h1>
         <p className="mt-3 text-sm text-muted">Anmeldung wird geprüft.</p>
       </main>
     );
   }
   if (!user) return <RedirectToSignIn />;
-  return <VorlaufApp />;
+  return <WasenderApp />;
 }

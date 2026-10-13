@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { XMLParser } from "fast-xml-parser";
-import type { CalEvent } from "./vorlauf.ts";
+import type { CalEvent } from "./wasender.ts";
 
 const GRAPH_HOSTS = new Set(["graph.microsoft.com", "graph.microsoft.us"]);
 
@@ -15,7 +15,7 @@ export type IoResult = {
 };
 
 function privateEwsAllowed(): boolean {
-  return process.env.VORLAUF_ALLOW_PRIVATE_EWS === "true";
+  return process.env.WASENDER_ALLOW_PRIVATE_EWS === "true";
 }
 
 function isMetadataHost(host: string): boolean {
@@ -61,7 +61,7 @@ async function assertPublicHttps(raw: string): Promise<URL> {
   if (url.username || url.password) throw new Error("Zugangsdaten nicht in die URL schreiben.");
   if (blockedAddress(url.hostname)) {
     throw new Error(
-      "Lokale und private Adressen sind blockiert. Auf dem internen Server VORLAUF_ALLOW_PRIVATE_EWS=true setzen, wenn Exchange im eigenen Netz liegt.",
+      "Lokale und private Adressen sind blockiert. Auf dem internen Server WASENDER_ALLOW_PRIVATE_EWS=true setzen, wenn Exchange im eigenen Netz liegt.",
     );
   }
   const resolved = await lookup(url.hostname);

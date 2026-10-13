@@ -12,8 +12,8 @@ import {
   type CalEvent,
   type Frequency,
   type RecipientRef,
-} from "@/lib/vorlauf";
-import { readEwsCalendar, readGraphCalendar, readOutlookCalendar, sendWhatsAppMessage } from "@/lib/vorlauf-io.server";
+} from "@/lib/wasender";
+import { readEwsCalendar, readGraphCalendar, readOutlookCalendar, sendWhatsAppMessage } from "@/lib/wasender-io.server";
 
 type Role = "admin" | "user";
 
@@ -478,11 +478,11 @@ async function dispatchDue(sql: Sql, now: Date): Promise<{ sent: number; failed:
 }
 
 export function pulseConfigured(): boolean {
-  return Boolean(process.env.VORLAUF_PULSE_SECRET?.trim());
+  return Boolean(process.env.WASENDER_PULSE_SECRET?.trim());
 }
 
 export function pulseAuthorized(header: string | null): boolean {
-  const secret = process.env.VORLAUF_PULSE_SECRET?.trim();
+  const secret = process.env.WASENDER_PULSE_SECRET?.trim();
   const match = /^Bearer\s+(\S+)$/.exec(header ?? "");
   if (!secret || !match) return false;
   const given = Buffer.from(match[1]);
