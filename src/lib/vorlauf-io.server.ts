@@ -124,7 +124,7 @@ export async function readGraphCalendar(input: {
   if (token.length < 20) return { ok: false, events: [], error: "Graph-Zugriffstoken fehlt." };
   let path = "/v1.0/me/calendarView";
   if (input.calendarId.trim()) {
-    if (!/^[A-Za-z0-9_+=\/.-]{1,400}$/.test(input.calendarId.trim())) {
+    if (!/^[A-Za-z0-9_+=/.-]{1,400}$/.test(input.calendarId.trim())) {
       return { ok: false, events: [], error: "Kalender-ID hat ein unerwartetes Format." };
     }
     path = `/v1.0/me/calendars/${encodeURIComponent(input.calendarId.trim())}/calendarView`;

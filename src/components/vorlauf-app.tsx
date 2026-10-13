@@ -53,13 +53,6 @@ export function VorlaufApp() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>("termine");
 
-  const refresh = async () => {
-    const next = await loadDesk();
-    setData(next);
-    setError(null);
-    return next;
-  };
-
   useEffect(() => {
     if (!user?.id) return;
     let stop = false;
@@ -582,6 +575,25 @@ function Calendar({ data, onChange, onError }: { data: DeskData; onChange: (data
         <div className="mb-4 grid gap-3">
           <Field label="EWS-Adresse" hint="Öffentliches HTTPS. Heimnetz-Adressen werden nicht aufgerufen.">
             <TextInput value={ewsUrl} onChange={(event) => setEwsUrl(event.target.value)} />
+          </Field>
+          <Field label="Anmeldung">
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["basic", "Benutzer und Kennwort"],
+                  ["bearer", "Bearer-Token"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setEwsAuth(id)}
+                  className={ewsAuth === id ? "min-h-11 rounded-lg bg-accent px-3 text-sm text-accent-fg" : "min-h-11 rounded-lg border border-line px-3 text-sm"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Benutzer">
             <TextInput value={ewsUser} onChange={(event) => setEwsUser(event.target.value)} />
